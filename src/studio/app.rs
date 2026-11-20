@@ -1176,10 +1176,11 @@ impl Studio {
         }
     }
 
-    /// Add an SVG file's artwork to the document (Illustrator's Place).
-    pub fn place_svg(&mut self, path: &Path) {
+    /// Add a file to the document (Illustrator's Place): SVG artwork, an
+    /// image to trace, or a machine file's stitches.
+    pub fn place_file(&mut self, path: &Path) {
         if is_machine_file(path) {
-            self.merge_design(path);
+            self.place_stitches(path);
             return;
         }
         if path
@@ -1218,19 +1219,14 @@ impl Studio {
 }
 
 impl Studio {
-    /// Merge another design into this one (Embrilliance's Merge): a machine
-    /// file's stitches come in at their real size, centered in the hoop, as
-    /// one group named after the file, on top of what's there (sewn last).
-    /// They're selected, to move into place; one undo takes them out.
-    /// SVG artwork and images are placed as Place places them.
-    pub fn merge_design(&mut self, path: &Path) {
-        if !is_machine_file(path) {
-            self.place_svg(path);
-            return;
-        }
+    /// Place a machine file (Embrilliance's Merge): its stitches come in
+    /// at their real size, centered in the hoop, as one group named after
+    /// the file, on top of what's there (sewn last). They're selected, to
+    /// move into place; one undo takes them out.
+    fn place_stitches(&mut self, path: &Path) {
         let mut added = Vec::new();
         match self.structural(|d| {
-            added = d.merge(path, zigzag::document::Placement::default())?;
+            added = d.place_file(path, zigzag::document::Placement::default())?;
             Ok(())
         }) {
             Ok(()) => {
@@ -1245,25 +1241,25 @@ impl Studio {
                 // density changes (Embrilliance's Merge keeps the size too).
                 self.status = if b.width() > hw * 10.0 + 0.5 || b.height() > hh * 10.0 + 0.5 {
                     format!(
-                        "Merged {name} ({:.0} × {:.0} mm): it's bigger than the {hw:.0} × {hh:.0} mm hoop.",
+                        "Placed {name} ({:.0} × {:.0} mm): it's bigger than the {hw:.0} × {hh:.0} mm hoop.",
                         b.width() / 10.0,
                         b.height() / 10.0
                     )
                 } else {
                     format!(
-                        "Merged {name} ({:.0} × {:.0} mm, {} objects).",
+                        "Placed {name} ({:.0} × {:.0} mm, {} objects).",
                         b.width() / 10.0,
                         b.height() / 10.0,
                         added.len()
                     )
                 };
             }
-            Err(e) => self.status = format!("Couldn't merge {}: {e:#}", path.display()),
+            Err(e) => self.status = format!("Couldn't place {}: {e:#}", path.display()),
         }
     }
 }
 
-/// Where merged stitches fall: their needle points, without the width of
+/// Where placed stitches fall: their needle points, without the width of
 /// the line they're drawn with.
 pub(crate) fn merged_bounds(
     doc: &zigzag::document::Document,
@@ -2224,8 +2220,7 @@ impl Studio {
                     (A::Paste, "Paste", RowIcon::None),
                     (A::SelectAll, "Select All", RowIcon::Icon(Icon::Select)),
                     (A::AddText, "Add Text…", RowIcon::Icon(Icon::Text)),
-                    (A::Place, "Place SVG…", RowIcon::Icon(Icon::Plus)),
-                    (A::Merge, "Merge Design…", RowIcon::Icon(Icon::Plus)),
+                    (A::Place, "Place…", RowIcon::Icon(Icon::Plus)),
                     (A::ZoomFit, "Zoom to Fit", RowIcon::Icon(Icon::ZoomFit)),
                 ] {
                     self.action_row(ui, a, label, icon);

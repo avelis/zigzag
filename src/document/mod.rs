@@ -704,13 +704,13 @@ impl Document {
             .collect())
     }
 
-    /// Merge another design into this one, as Embrilliance's Merge does:
-    /// a machine file (PES/PEC/DST/EXP/JEF) comes in as manual stitches at
+    /// Place a file in this design (Illustrator's Place; Embrilliance calls
+    /// it Merge): a machine file (PES/PEC/DST/EXP/JEF) comes in as manual stitches at
     /// its real size, its color blocks inside one group named after the
     /// file, so it moves as one object and shows in the Layers list under
     /// that name. An SVG is placed as [`Document::add_svg`] places it, and
     /// a raster logo is traced first. Returns the indices of the new shapes.
-    pub fn merge(&mut self, path: &Path, place: Placement) -> Result<Vec<usize>> {
+    pub fn place_file(&mut self, path: &Path, place: Placement) -> Result<Vec<usize>> {
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
@@ -722,7 +722,7 @@ impl Document {
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            return self.merge_stitch_file(&bytes, &ext, &stem, place);
+            return self.place_stitch_file(&bytes, &ext, &stem, place);
         }
         let svg = if crate::trace::is_image(&ext) {
             crate::trace::trace_bytes(&bytes, &crate::trace::TraceOptions::default())
@@ -731,7 +731,7 @@ impl Document {
         } else {
             String::from_utf8(bytes).map_err(|_| {
                 anyhow!(
-                    "{} isn't a design ZigZag can merge: it merges SVG, images to trace, and {} machine files",
+                    "{} isn't a file ZigZag can place: it places SVG, images to trace, and {} machine files",
                     path.display(),
                     crate::formats::READABLE_FORMATS.join("/").to_uppercase()
                 )
@@ -740,9 +740,9 @@ impl Document {
         self.add_svg(&svg, place)
     }
 
-    /// Merge a machine file's stitches (`ext` names its format) as one
-    /// group called `name`. See [`Document::merge`].
-    pub fn merge_stitch_file(
+    /// Place a machine file's stitches (`ext` names its format) as one
+    /// group called `name`. See [`Document::place_file`].
+    pub fn place_stitch_file(
         &mut self,
         bytes: &[u8],
         ext: &str,
@@ -1804,7 +1804,7 @@ mod tests {
             ..Placement::default()
         };
         let new = d
-            .merge_stitch_file(&merge_sample_pes(), "pes", "Rose Badge", place)
+            .place_stitch_file(&merge_sample_pes(), "pes", "Rose Badge", place)
             .unwrap();
         assert_eq!(new.len(), 2, "one object per run");
         assert_eq!(d.shapes.len(), before + 2, "what was there stays");
@@ -1869,7 +1869,7 @@ mod tests {
             out
         };
         let mut d = Document::empty();
-        d.merge_stitch_file(&pes, "pes", "badge", Placement::default())
+        d.place_stitch_file(&pes, "pes", "badge", Placement::default())
             .unwrap();
         let out = crate::formats::pes::write_pes(&d.plan());
         let (want, got) = (pts(&pes), pts(&out));
@@ -1881,10 +1881,10 @@ mod tests {
         let mut d = Document::empty();
         let pes = merge_sample_pes();
         let a = d
-            .merge_stitch_file(&pes, "pes", "badge", Placement::default())
+            .place_stitch_file(&pes, "pes", "badge", Placement::default())
             .unwrap();
         let b = d
-            .merge_stitch_file(&pes, "pes", "badge", Placement::default())
+            .place_stitch_file(&pes, "pes", "badge", Placement::default())
             .unwrap();
         let group = |i: usize| d.shapes[i].groups.first().cloned().unwrap();
         assert_ne!(group(a[0]), group(b[0]));
@@ -1902,7 +1902,7 @@ mod tests {
         let path = dir.join("tulip.pes");
         std::fs::write(&path, merge_sample_pes()).unwrap();
         let mut d = Document::empty();
-        let new = d.merge(&path, Placement::default()).unwrap();
+        let new = d.place_file(&path, Placement::default()).unwrap();
         assert_eq!(new.len(), 2);
         assert_eq!(d.shapes[new[0]].groups[0], "tulip");
         let art = dir.join("dot.svg");
@@ -1911,10 +1911,10 @@ mod tests {
             r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle id="dot" cx="5" cy="5" r="4" fill="#0a0"/></svg>"##,
         )
         .unwrap();
-        assert_eq!(d.merge(&art, Placement::default()).unwrap().len(), 1);
+        assert_eq!(d.place_file(&art, Placement::default()).unwrap().len(), 1);
         let junk = dir.join("junk.pes");
         std::fs::write(&junk, b"not a pes").unwrap();
-        assert!(d.merge(&junk, Placement::default()).is_err());
+        assert!(d.place_file(&junk, Placement::default()).is_err());
         assert_eq!(d.shapes.len(), 3, "a file that can't be read adds nothing");
         let _ = std::fs::remove_dir_all(&dir);
     }

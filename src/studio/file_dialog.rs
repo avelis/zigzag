@@ -1,4 +1,4 @@
-//! Open, Place, Merge, Save As and Export panels.
+//! Open, Place, Save As and Export panels.
 //!
 //! On macOS a blocking `NSSavePanel` / `NSOpenPanel` (`rfd::FileDialog`)
 //! runs its own modal loop from inside winit's event handler. AppKit can
@@ -25,7 +25,6 @@ use crate::app::Studio;
 pub(crate) enum Then {
     Open,
     Place,
-    Merge,
     SaveAs,
     Export(&'static str),
 }
@@ -182,8 +181,7 @@ impl Studio {
         };
         match p.then {
             Then::Open => self.load(&path),
-            Then::Place => self.place_svg(&path),
-            Then::Merge => self.merge_design(&path),
+            Then::Place => self.place_file(&path),
             Then::SaveAs => self.save(Some(&path)),
             Then::Export(ext) => {
                 self.status = match self.export_to(ext, &path) {
