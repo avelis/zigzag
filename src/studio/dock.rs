@@ -2181,7 +2181,7 @@ impl Studio {
                 if ui.button("Add Text…").clicked() {
                     self.open_text_window();
                 }
-                if ui.button("Place SVG…").clicked() {
+                if ui.button("Place…").clicked() {
                     self.run_action(crate::commands::Action::Place);
                 }
                 if ui.button("Draw with Pen").clicked() {

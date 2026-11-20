@@ -1007,6 +1007,7 @@ pub fn activity(tool: &str) -> &'static str {
         "add_outline" => "Outlining",
         "simplify_design" => "Simplifying",
         "trace_image" => "Tracing",
+        "place_file" => "Placing",
         "render_preview" => "Looking",
         "check_design" | "measure_stitching" => "Checking",
         "get_design" | "get_svg" | "select" => "Reading",
