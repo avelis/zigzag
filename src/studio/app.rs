@@ -1239,7 +1239,7 @@ impl Studio {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                let b = self.art_bounds(&added);
+                let b = merged_bounds(&self.doc, &added);
                 let (hw, hh) = self.hoop_dims();
                 // Stitches aren't scaled to fit: scaled, a machine file's
                 // density changes (Embrilliance's Merge keeps the size too).
@@ -1263,10 +1263,21 @@ impl Studio {
     }
 }
 
+/// Where merged stitches fall: their needle points, without the width of
+/// the line they're drawn with.
+pub(crate) fn merged_bounds(
+    doc: &zigzag::document::Document,
+    idx: &[usize],
+) -> zigzag::geom::Bounds {
+    let shapes: Vec<_> = idx.iter().map(|&i| doc.shapes[i].clone()).collect();
+    zigzag::svg::shapes_bounds(&shapes)
+}
+
 /// A PES, PEC, DST, EXP or JEF file, by its extension.
 fn is_machine_file(path: &Path) -> bool {
     path.extension().is_some_and(|e| {
-        zigzag::formats::READABLE_FORMATS.contains(&e.to_string_lossy().to_ascii_lowercase().as_str())
+        zigzag::formats::READABLE_FORMATS
+            .contains(&e.to_string_lossy().to_ascii_lowercase().as_str())
     })
 }
 

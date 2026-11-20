@@ -1,6 +1,6 @@
 //! MCP tools: what agents can do with the live studio document.
 
-use crate::app::{HOOPS, SPM, Studio, shape_bounds};
+use crate::app::{HOOPS, SPM, Studio, merged_bounds, shape_bounds};
 use crate::mcp::{Content, ToolResult};
 use crate::widgets::{allowed_kinds, kind_name};
 use serde_json::{Value, json};
@@ -1679,7 +1679,7 @@ impl Studio {
         .map_err(|e| format!("couldn't merge {}: {e:#}", path.display()))?;
         self.replan_soon();
         self.fit_view();
-        let b = self.art_bounds(&added);
+        let b = merged_bounds(&self.doc, &added);
         let (hw, hh) = self.hoop_dims();
         let objs: Vec<Value> = added.iter().map(|&i| self.object_json(i)).collect();
         Ok(ToolResult::json(&json!({
@@ -3115,9 +3115,15 @@ mod tests {
             assert_eq!(o["kind"], "manual", "{o}");
         }
         let added = &s.doc.shapes[n..];
-        assert!(added.iter().all(|x| x.groups == vec!["gold_star".to_string()]));
+        assert!(
+            added.iter().all(|x| x.groups[0] == "gold_star"),
+            "one group named after the file"
+        );
         // A relative path or a file that isn't there is an error that changes nothing.
-        assert!(s.run_tool("merge_design", &json!({ "path": "star.dst" })).is_error);
+        assert!(
+            s.run_tool("merge_design", &json!({ "path": "star.dst" }))
+                .is_error
+        );
         assert!(
             s.run_tool(
                 "merge_design",

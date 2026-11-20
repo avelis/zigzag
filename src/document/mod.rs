@@ -750,8 +750,15 @@ impl Document {
         place: Placement,
     ) -> Result<Vec<usize>> {
         let file = crate::formats::read::read_stitch_file(bytes, ext)?;
-        if file.blocks.iter().all(|b| b.runs.iter().all(|r| r.is_empty())) {
-            bail!("the {} file has no stitches in it", ext.to_ascii_uppercase());
+        if file
+            .blocks
+            .iter()
+            .all(|b| b.runs.iter().all(|r| r.is_empty()))
+        {
+            bail!(
+                "the {} file has no stitches in it",
+                ext.to_ascii_uppercase()
+            );
         }
         let svg = crate::formats::read::to_svg_grouped(&file, &merged_group_id(name));
         self.add_svg(&svg, place)
@@ -1850,7 +1857,12 @@ mod tests {
             // once (lock stitches go back over points already there).
             let mut out: Vec<(i64, i64)> = all
                 .iter()
-                .map(|p| ((p.x - b.min.x).round() as i64, (p.y - b.min.y).round() as i64))
+                .map(|p| {
+                    (
+                        (p.x - b.min.x).round() as i64,
+                        (p.y - b.min.y).round() as i64,
+                    )
+                })
                 .collect();
             out.sort();
             out.dedup();
