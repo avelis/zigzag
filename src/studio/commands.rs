@@ -18,6 +18,9 @@ pub enum Action {
     NextTab,
     PreviousTab,
     Place,
+    /// File › Merge Design…: another design's stitches into this one, as
+    /// Embrilliance's Merge.
+    Merge,
     Save,
     SaveAs,
     Export(&'static str),
@@ -230,6 +233,7 @@ pub fn menus() -> Vec<(&'static str, Vec<Entry>)> {
                 Item(Action::New, "New", cmd(Key::N)),
                 Item(Action::Open, "Open…", cmd(Key::O)),
                 Item(Action::Place, "Place SVG…", cmd_shift(Key::P)),
+                Item(Action::Merge, "Merge Design…", cmd_shift(Key::M)),
                 Sep,
                 Item(Action::CloseTab, "Close", cmd(Key::W)),
                 Item(Action::Save, "Save", cmd(Key::S)),
@@ -744,6 +748,15 @@ impl Studio {
                 exts.extend(zigzag::trace::IMAGE_FORMATS);
                 let req = crate::file_dialog::Request::open().filter("Artwork", &exts);
                 self.file_dialog(req, crate::file_dialog::Then::Place);
+            }
+            Action::Merge => {
+                let mut exts: Vec<&str> = zigzag::formats::READABLE_FORMATS.to_vec();
+                exts.push("svg");
+                exts.extend(zigzag::trace::IMAGE_FORMATS);
+                let req = crate::file_dialog::Request::open()
+                    .filter("Designs", &exts)
+                    .filter("Machine files", &zigzag::formats::READABLE_FORMATS);
+                self.file_dialog(req, crate::file_dialog::Then::Merge);
             }
             Action::Save => {
                 if self.doc.path.is_some() {

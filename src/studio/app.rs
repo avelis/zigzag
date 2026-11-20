@@ -1178,6 +1178,10 @@ impl Studio {
 
     /// Add an SVG file's artwork to the document (Illustrator's Place).
     pub fn place_svg(&mut self, path: &Path) {
+        if is_machine_file(path) {
+            self.merge_design(path);
+            return;
+        }
         if path
             .extension()
             .is_some_and(|e| zigzag::trace::is_image(&e.to_string_lossy()))
@@ -1211,6 +1215,59 @@ impl Studio {
             Err(e) => self.status = format!("Couldn't place {}: {e:#}", path.display()),
         }
     }
+}
+
+impl Studio {
+    /// Merge another design into this one (Embrilliance's Merge): a machine
+    /// file's stitches come in at their real size, centered in the hoop, as
+    /// one group named after the file, on top of what's there (sewn last).
+    /// They're selected, to move into place; one undo takes them out.
+    /// SVG artwork and images are placed as Place places them.
+    pub fn merge_design(&mut self, path: &Path) {
+        if !is_machine_file(path) {
+            self.place_svg(path);
+            return;
+        }
+        let mut added = Vec::new();
+        match self.structural(|d| {
+            added = d.merge(path, zigzag::document::Placement::default())?;
+            Ok(())
+        }) {
+            Ok(()) => {
+                self.set_selection(&added);
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let b = self.art_bounds(&added);
+                let (hw, hh) = self.hoop_dims();
+                // Stitches aren't scaled to fit: scaled, a machine file's
+                // density changes (Embrilliance's Merge keeps the size too).
+                self.status = if b.width() > hw * 10.0 + 0.5 || b.height() > hh * 10.0 + 0.5 {
+                    format!(
+                        "Merged {name} ({:.0} × {:.0} mm): it's bigger than the {hw:.0} × {hh:.0} mm hoop.",
+                        b.width() / 10.0,
+                        b.height() / 10.0
+                    )
+                } else {
+                    format!(
+                        "Merged {name} ({:.0} × {:.0} mm, {} objects).",
+                        b.width() / 10.0,
+                        b.height() / 10.0,
+                        added.len()
+                    )
+                };
+            }
+            Err(e) => self.status = format!("Couldn't merge {}: {e:#}", path.display()),
+        }
+    }
+}
+
+/// A PES, PEC, DST, EXP or JEF file, by its extension.
+fn is_machine_file(path: &Path) -> bool {
+    path.extension().is_some_and(|e| {
+        zigzag::formats::READABLE_FORMATS.contains(&e.to_string_lossy().to_ascii_lowercase().as_str())
+    })
 }
 
 impl eframe::App for Studio {
@@ -2157,6 +2214,7 @@ impl Studio {
                     (A::SelectAll, "Select All", RowIcon::Icon(Icon::Select)),
                     (A::AddText, "Add Text…", RowIcon::Icon(Icon::Text)),
                     (A::Place, "Place SVG…", RowIcon::Icon(Icon::Plus)),
+                    (A::Merge, "Merge Design…", RowIcon::Icon(Icon::Plus)),
                     (A::ZoomFit, "Zoom to Fit", RowIcon::Icon(Icon::ZoomFit)),
                 ] {
                     self.action_row(ui, a, label, icon);

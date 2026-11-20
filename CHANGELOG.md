@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- File › Merge Design… (⇧⌘M) brings a PES, PEC, DST, EXP or JEF file
+  into the open design, as Embrilliance's Merge does: at its real size,
+  as one group named after the file in the Layers list, sewn after
+  what's there. Agents can do it with `merge_design`, and the CLI with
+  `zigzag convert … --merge FILE[@X,Y]`.
+
 ## 0.1.6 — 2026-11-19
 
 - Satin lettering is read stroke by stroke, with Corners (Cut, Auto or
