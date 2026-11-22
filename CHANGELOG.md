@@ -1,22 +1,25 @@
 # Changelog
 
-## 0.1.7 — 2026-11-20
+## 0.1.8 — 2026-11-21
 
-- Each design keeps its chats with the agent; paste or drop images into
-  the prompt, and type `/` for commands (model, effort, history, fix).
-- The agent can review a design before it's sewn, offer choices as a
-  card, align, combine and rename objects, and route a thread round a cut.
-- Blend in the Document panel sews across gaps where the thread is close
-  in color to what it crosses, instead of cutting.
-- Files open in the ZigZag window that's already running; Windows keeps
-  its open tabs and settings.
-- A failing agent tool or a malformed design no longer crashes the app.
+- File › Share… puts a design on zigzag.diy: a page with its picture, a
+  stitch player and downloads for every machine, for anyone, for people
+  with the link, or only you.
+- The Open button on a zigzag.diy page opens the design in ZigZag.
+- Sign in under Settings › Account and your machines, palettes and thread
+  chart follow you between computers.
+- Variable fonts are drawn at any weight.
+- Messages written while the agent works wait and go when its turn ends.
+- A long line of satin lettering plans in a moment instead of seconds.
 
-[Full release notes](packaging/releases/0.1.7.md)
-· [Downloads](https://github.com/simpsoka/zigzag/releases/tag/v0.1.7)
+[Full release notes](packaging/releases/0.1.8.md)
+· [Downloads](https://github.com/simpsoka/zigzag/releases/tag/v0.1.8)
 
 ## Previous releases
 
+- [0.1.7](packaging/releases/0.1.7.md): chats kept with each design, images
+  and slash commands in the prompt, design review, Blend, files opened in
+  the running window.
 - [0.1.6](packaging/releases/0.1.6.md): satin lettering read stroke by
   stroke with Corners, Break into Columns, Annotate and versions for the
   agent, stitch checks in Issues.

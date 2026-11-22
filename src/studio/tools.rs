@@ -189,6 +189,27 @@ fn gone_in_batch(why: &str, names_before: &[Vec<String>], steps: &[Value]) -> Op
     ))
 }
 
+/// The error for an object name that isn't there. It names a dozen of the
+/// objects, not all of them: a traced design has hundreds, and the whole list
+/// filled the chat. `get_design` has the rest.
+fn no_object_named(asked: &str, names: &[String]) -> String {
+    const SHOWN: usize = 12;
+    let some = names
+        .iter()
+        .take(SHOWN)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    match names.len() {
+        0 => format!("no object named '{asked}': the design has no objects"),
+        n if n <= SHOWN => format!("no object named '{asked}'. Objects: {some}"),
+        n => format!(
+            "no object named '{asked}'. Objects: {some}, and {} more (get_design lists them all)",
+            n - SHOWN
+        ),
+    }
+}
+
 fn obj_schema() -> Value {
     json!({ "description": "Object: its index in sewing order (0-based), its name from get_design, or the id you gave it in an SVG (Face_mask for \"Face mask\").", "oneOf": [{ "type": "integer" }, { "type": "string" }] })
 }
@@ -937,6 +958,20 @@ pub fn tool_specs() -> Value {
 
 /// Tools that only look: they change nothing, and their results are what
 /// was asked for.
+/// A tool that reads the stitches (so they're planned before it runs).
+pub(crate) fn reads_stitches(name: &str) -> bool {
+    matches!(
+        name,
+        "get_design"
+            | "get_cuts"
+            | "render_preview"
+            | "check_design"
+            | "review_design"
+            | "export"
+            | "send_to_skitch"
+    )
+}
+
 fn only_reads(name: &str) -> bool {
     matches!(
         name,
@@ -1066,6 +1101,14 @@ fn check_args(name: &str, args: &Value) -> Result<(), String> {
     ))
 }
 
+/// Field `key` of `v`: an element, by number, of an array.
+fn field<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
+    match key.parse::<usize>() {
+        Ok(i) if v.is_array() => v.get(i),
+        _ => v.get(key),
+    }
+}
+
 /// Replace "$N.path" strings in `v` by that field of step N's result.
 fn resolve_refs(v: &Value, results: &[Value]) -> Result<Value, String> {
     Ok(match v {
@@ -1080,12 +1123,48 @@ fn resolve_refs(v: &Value, results: &[Value]) -> Result<Value, String> {
             let mut cur = results
                 .get(n)
                 .ok_or(format!("{s}: there is no earlier step {n}"))?;
-            for key in path.split('.').filter(|k| !k.is_empty()) {
-                cur = match key.parse::<usize>() {
-                    Ok(i) if cur.is_array() => cur.get(i),
-                    _ => cur.get(key),
-                }
-                .ok_or(format!("{s}: step {n}'s result has no `{key}`"))?;
+            for (k, key) in path.split('.').filter(|k| !k.is_empty()).enumerate() {
+                // (A step that added one object: "$N.name" is its name, as
+                // for a tool that answers with the object itself.)
+                // (Whether the step answered in full, each object with
+                // its name, or tersely, with the names alone; and `made`
+                // as well as `added`, as `added_names` reads them.)
+                let only_added = || {
+                    let all: Vec<&Value> = ["added", "made"]
+                        .iter()
+                        .filter_map(|a| cur.get(*a).and_then(Value::as_array))
+                        .flatten()
+                        .collect();
+                    match all.as_slice() {
+                        [one] if k == 0 => field(one, key)
+                            .or_else(|| (key == "name" && one.is_string()).then_some(*one)),
+                        _ => None,
+                    }
+                };
+                cur = match field(cur, key).or_else(only_added) {
+                    Some(v) => v,
+                    None => {
+                        let has: Vec<String> = cur
+                            .as_object()
+                            .map(|o| o.keys().map(|k| format!("`{k}`")).collect())
+                            .unwrap_or_default();
+                        // (A terse step lists what it added by name alone.)
+                        let named = cur
+                            .get("added")
+                            .and_then(Value::as_array)
+                            .and_then(|a| a.first())
+                            .is_some_and(Value::is_string);
+                        let eg = if named { "added.0" } else { "added.0.name" };
+                        return Err(if has.is_empty() {
+                            format!("{s}: step {n}'s result has no `{key}`")
+                        } else {
+                            format!(
+                                "{s}: step {n}'s result has no `{key}`; it has {} (an object it added is \"${n}.{eg}\")",
+                                has.join(", ")
+                            )
+                        });
+                    }
+                };
             }
             cur.clone()
         }
@@ -1172,10 +1251,7 @@ impl Studio {
                     .collect();
                 match hits.as_slice() {
                     [i] => Ok(*i),
-                    [] => Err(format!(
-                        "no object named '{s}'. Objects: {}",
-                        self.names.join(", ")
-                    )),
+                    [] => Err(no_object_named(s, &self.names)),
                     _ => Err(format!(
                         "'{s}' matches several objects: {}",
                         hits.iter()
@@ -1817,16 +1893,7 @@ impl Studio {
             return ToolResult::error(e);
         }
         // Inside a batch, only a step that reads the stitches waits for them.
-        let reads = matches!(
-            name,
-            "get_design"
-                | "get_cuts"
-                | "render_preview"
-                | "check_design"
-                | "review_design"
-                | "export"
-                | "send_to_skitch"
-        );
+        let reads = reads_stitches(name);
         if reads {
             self.plan_now();
         }
@@ -5058,6 +5125,29 @@ impl Studio {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_terse_steps_one_added_object_is_named_by_dollar_name() {
+        // (A terse step lists what it added by name alone; `made` too.)
+        let terse = [json!({ "ok": true, "added": ["leaf"] })];
+        assert_eq!(resolve_refs(&json!("$0.name"), &terse).unwrap(), "leaf");
+        let made = [json!({ "ok": true, "made": [{ "name": "stem" }] })];
+        assert_eq!(resolve_refs(&json!("$0.name"), &made).unwrap(), "stem");
+        // And the hint for a miss names a reference that works.
+        let two = [json!({ "ok": true, "added": ["a", "b"] })];
+        let e = resolve_refs(&json!("$0.name"), &two).unwrap_err();
+        assert!(e.contains("\"$0.added.0\"") && !e.contains("added.0.name"), "{e}");
+    }
+
+    #[test]
+    fn a_missing_name_lists_a_dozen_objects_not_hundreds() {
+        let few: Vec<String> = ["Face", "Mouth"].map(String::from).to_vec();
+        assert_eq!(no_object_named("Hat", &few), "no object named 'Hat'. Objects: Face, Mouth");
+        let many: Vec<String> = (0..80).map(|i| format!("trace {i}")).collect();
+        let why = no_object_named("Illustrated blue ground", &many);
+        assert!(why.contains("trace 11, and 68 more (get_design lists them all)"), "{why}");
+        assert!(!why.contains("trace 12"), "{why}");
+    }
     use crate::app::Studio;
     use std::io::{Read, Write};
 
@@ -7143,7 +7233,7 @@ mod tests {
             assert!(body.contains("-32601"));
         });
         while !client.is_finished() {
-            studio.handle_mcp();
+            studio.handle_mcp(None);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         client.join().unwrap();
@@ -7152,6 +7242,82 @@ mod tests {
             4,
             "the agent's artwork is on the canvas"
         );
+    }
+
+    /// A big design's edit, asked for a short answer, is planned on the
+    /// worker: the UI thread goes on between frames, and the answer (with
+    /// what the edit broke) goes once the plan is back.
+    #[test]
+    fn a_slow_designs_edit_is_answered_once_the_worker_has_planned_it() {
+        let server = crate::mcp::start(0, tool_specs(), INSTRUCTIONS.into(), || {}).unwrap();
+        let port = server.addr.port();
+        let path =
+            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/badge.svg"));
+        let mut studio = Studio::with_file(Some(path), None);
+        studio.replan();
+        studio.mcp = Some(server);
+        // As if its last plan had been slow.
+        studio.planner.slow = true;
+        let sun = studio.names.iter().position(|n| n == "sun").unwrap();
+        let before = studio.design.per_shape[sun];
+        let ctx = eframe::egui::Context::default();
+        let client = std::thread::spawn(move || {
+            let call = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"set_object","arguments":{"object":"sun","spacing_mm":0.8,"terse":true}}});
+            let (_, body) = http(port, &call.to_string(), None);
+            // And the next call, which waits for it.
+            let call = json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_design","arguments":{}}});
+            let (_, next) = http(port, &call.to_string(), None);
+            (body, next)
+        });
+        let mut waited = false;
+        while !client.is_finished() {
+            studio.handle_mcp(Some(&ctx));
+            waited |= studio.mcp_waiting.is_some();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let (body, next) = client.join().unwrap();
+        assert!(waited, "the answer waited for the worker's plan");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["result"]["isError"], false, "{body}");
+        let answer: Value =
+            serde_json::from_str(v["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(answer["ok"], true);
+        assert!(answer["new_problems"].is_array(), "{answer}");
+        let v: Value = serde_json::from_str(&next).unwrap();
+        assert_eq!(v["result"]["isError"], false, "{next}");
+        // The plan it answered after is the edit's.
+        assert!(!studio.planner.pending && studio.mcp_waiting.is_none());
+        assert_ne!(studio.design.per_shape[sun], before);
+    }
+
+    /// "$N.name" names what step N added, when it added one object (as an
+    /// agent writes it for combine_shapes, say); with more, the error says
+    /// what the result has and how to name one.
+    #[test]
+    fn a_batch_step_names_the_one_object_an_earlier_step_added() {
+        let mut s = Studio::with_file(None, None);
+        let one = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path id="leaf" fill="#336633" d="M0 0 H10 V10 H0 Z"/></svg>"##;
+        let r = s.run_tool(
+            "batch",
+            &json!({ "steps": [
+                { "tool": "add_svg", "arguments": { "svg": one, "width_mm": 20.0 } },
+                { "tool": "set_object", "arguments": { "object": "$0.name", "color": "#f47b20" } },
+            ] }),
+        );
+        ok(r);
+        let leaf = s.names.iter().position(|n| n == "leaf").unwrap();
+        assert_eq!(s.doc.shapes[leaf].color, [0xf4, 0x7b, 0x20]);
+        // More than one: which isn't guessed.
+        let r = s.run_tool(
+            "batch",
+            &json!({ "steps": [
+                { "tool": "add_svg", "arguments": { "svg": BADGE, "width_mm": 20.0 } },
+                { "tool": "set_object", "arguments": { "object": "$0.name", "angle": 30 } },
+            ] }),
+        );
+        assert!(r.is_error);
+        let e = text(&r);
+        assert!(e.contains("`added`") && e.contains("$0.added.0.name"), "{e}");
     }
 
     #[test]

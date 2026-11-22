@@ -2,6 +2,7 @@
 //! MCP server so agents can work on the same canvas.
 
 mod about;
+mod account;
 mod agent;
 mod agent_log;
 mod app;
@@ -32,6 +33,7 @@ mod lasso;
 mod layout;
 mod lettering;
 mod lights;
+mod link;
 mod machine;
 mod machines;
 mod mcp;
@@ -50,10 +52,12 @@ mod session;
 mod settings;
 mod sew;
 mod shapes;
+mod share;
 mod simplify;
 mod slash;
 mod snap;
 mod swatches;
+mod sync;
 mod tabs;
 mod taskbar;
 mod theme;
@@ -66,7 +70,7 @@ mod update;
 mod view_tools;
 mod widgets;
 
-const USAGE: &str = "usage: zigzag-studio [design.svg ...] [--select N] [--new-window] [--mcp-port PORT | --no-mcp | --mcp-stdio]\n\n  --mcp-stdio   no window: serve the MCP tools over stdin/stdout (headless, for agents)
+const USAGE: &str = "usage: zigzag-studio [design.svg | zigzag://open?url=… ...] [--select N] [--new-window] [--mcp-port PORT | --no-mcp | --mcp-stdio]\n\n  --mcp-stdio   no window: serve the MCP tools over stdin/stdout (headless, for agents)
   --new-window  a window of its own, even with ZigZag running already (also ZIGZAG_NEW_WINDOW=1)
 
 With ZigZag running already, the files open as tabs in its window instead.";
@@ -80,6 +84,8 @@ fn main() -> eframe::Result {
         panic!("a crash made on purpose, to test the crash log");
     }
     let mut paths = Vec::new();
+    // `zigzag://` links (Windows and Linux; macOS sends an Apple Event).
+    let mut links = Vec::new();
     let mut select = None;
     // The agent server's port: as the command line says, else the
     // environment, else Settings (which can also turn it off).
@@ -107,6 +113,7 @@ fn main() -> eframe::Result {
             }
             // Finder can pass a process serial number when launching the .app.
             Some(s) if s.starts_with("-psn_") => {}
+            Some(s) if link::is_link(s) => links.push(s.to_string()),
             _ => paths.push(std::path::PathBuf::from(a)),
         }
     }
@@ -131,6 +138,7 @@ fn main() -> eframe::Result {
                 .map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone()))
                 .collect(),
             select,
+            links: links.clone(),
         };
         match instance::claim_in_config(&request) {
             instance::Start::First(i) => inbox = Some(i),
@@ -161,6 +169,14 @@ fn main() -> eframe::Result {
         });
         return Ok(());
     }
+    // Links this launch was started with download now, and open when the
+    // window is up; on macOS, links arrive as Apple Events from here on.
+    link::register_scheme();
+    for l in &links {
+        link::open(l);
+    }
+    #[cfg(target_os = "macos")]
+    link::listen_for_apple_events();
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
         viewport: {

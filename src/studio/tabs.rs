@@ -303,6 +303,8 @@ impl Studio {
         self.view_tools.lasso.clear();
         self.view_tools.build.cancel();
         self.cancel_previews();
+        // (The share panel is this document's.)
+        self.share.open = None;
         self.layout.offset_dialog = None;
         self.layout.cleanup_dialog = None;
         self.layout.swatch_dialog = None;

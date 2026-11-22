@@ -235,6 +235,86 @@ fn session_gone(message: &str) -> bool {
     about && missing
 }
 
+/// Ideas for a new design, for an empty chat to start from.
+const NEW_IDEAS: &[&str] = &[
+    "A round camp badge with a pine tree",
+    "A cat curled up asleep, for a pocket",
+    "A wildflower bouquet tied with a ribbon",
+    "A mountain sunset patch with a stitched border",
+    "My initials in a monogram with a laurel wreath",
+    "A bee on a honeycomb",
+    "A retro surf patch: “Catch a Wave”",
+    "A little whale for a baby's onesie",
+    "A coffee cup with steam swirls",
+    "A crescent moon with stars",
+    "A cactus in a terracotta pot",
+    "A mushroom cluster with tiny leaves",
+    "A lemon slice with leaves",
+    "A paper airplane with a dashed trail",
+    "A strawberry with a smiling face",
+    "A lighthouse on rocks, for a hat",
+    "A dog's name in a bone-shaped badge",
+    "A rainbow over two clouds",
+    "A fox sitting in tall grass",
+    "A bicycle with a basket of flowers",
+];
+
+/// Ideas for a change to the design that's open.
+const CHANGE_IDEAS: &[&str] = &[
+    "Make the lettering satin",
+    "Simplify this for a 4x4 hoop",
+    "Cut down the thread changes",
+    "Add a satin border around it",
+    "Make it sew faster",
+    "Try a warmer color palette",
+    "Fewer trims, please",
+    "Make it work on a stretchy T-shirt",
+    "Make it half the size",
+    "Check it for problems before I sew",
+];
+
+/// Three ideas from `seed`, none twice: for a design that's open, two new
+/// designs and a change to it; for an empty one, three new designs.
+fn ideas(seed: u64, has_design: bool) -> Vec<&'static str> {
+    // (splitmix64: a few good numbers from one.)
+    let mut x = seed;
+    let mut next = move || {
+        x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = x;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    };
+    let mut pick = |from: &[&'static str], n: usize, out: &mut Vec<&'static str>| {
+        let mut left: Vec<&'static str> = from.to_vec();
+        for _ in 0..n.min(left.len()) {
+            let k = (next() % left.len() as u64) as usize;
+            out.push(left.swap_remove(k));
+        }
+    };
+    let mut out = Vec::with_capacity(3);
+    if has_design {
+        pick(NEW_IDEAS, 2, &mut out);
+        pick(CHANGE_IDEAS, 1, &mut out);
+    } else {
+        pick(NEW_IDEAS, 3, &mut out);
+    }
+    out
+}
+
+/// A seed that's different each time it's asked for (the standard
+/// library's hasher is keyed at random).
+fn fresh_seed() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+    );
+    h.finish()
+}
+
 /// How long to wait for the last of its output once it has ended (something
 /// it started may be holding the pipe open).
 const LAST_WORDS: Duration = Duration::from_secs(2);
@@ -272,9 +352,20 @@ pub struct AgentState {
     /// The document its calls go to (a recovery number), once it has
     /// opened or switched to one itself while working.
     pub follow: Option<u32>,
+    /// Which ideas an empty chat shows (see [`ideas`]): chosen when it's
+    /// first shown, kept until the chat has something in it.
+    pub ideas_seed: Option<u64>,
     /// Stop was pressed (or the chat cleared) since the last frame: what
     /// was waiting to go to the agent next doesn't.
     pub stopped: bool,
+    /// Messages written while it worked, sent together when its turn ends
+    /// (or put back in the prompt box, if it's stopped).
+    pub queued: Vec<String>,
+    /// It was working last frame (this chat's), to tell when a turn ends.
+    was_running: bool,
+    /// A turn ended while the panel was put away: the tool strip's Agent
+    /// button shows a dot until it's opened.
+    pub unread: bool,
     /// A lookup running off the UI thread: (login PATH, what was found).
     lookup: Option<Receiver<(Option<String>, [Option<PathBuf>; 2])>>,
     /// The model chosen for each agent (by [`AgentKind::index`]); `None`
@@ -354,6 +445,8 @@ pub struct Chat {
     earlier: Option<crate::history::Meta>,
     show_earlier: bool,
     attach: Vec<PathBuf>,
+    queued: Vec<String>,
+    was_running: bool,
 }
 
 impl Chat {
@@ -1130,6 +1223,22 @@ impl AgentState {
         swap(&mut self.earlier, &mut c.earlier);
         swap(&mut self.show_earlier, &mut c.show_earlier);
         swap(&mut self.attach, &mut c.attach);
+        swap(&mut self.queued, &mut c.queued);
+        swap(&mut self.was_running, &mut c.was_running);
+    }
+
+    /// Put what was queued back in the prompt box, before anything being
+    /// written there now: it isn't sent.
+    pub fn unqueue(&mut self) {
+        if self.queued.is_empty() {
+            return;
+        }
+        let mut text = std::mem::take(&mut self.queued).join("\n\n");
+        if !self.prompt.trim().is_empty() {
+            text.push_str("\n\n");
+            text.push_str(&self.prompt);
+        }
+        self.prompt = text;
     }
 
     /// History was cleared: see [`Chat::forget_kept`].
@@ -1169,10 +1278,13 @@ impl AgentState {
         self.stopped = stopped;
     }
 
-    /// As if a prompt were running (a process that waits; `stop` ends it).
-    #[cfg(test)]
+    /// As if a prompt were running (a process that waits; `stop` ends it):
+    /// for tests, and capture mode's pictures of the panel at work.
     pub fn start_fake_run(&mut self) {
-        let child = Command::new("sleep").arg("30").spawn().expect("sleep");
+        // (Where there's no `sleep` to run, Windows say, nothing starts.)
+        let Ok(child) = Command::new("sleep").arg("30").spawn() else {
+            return;
+        };
         let (_tx, rx) = mpsc::channel();
         self.run = Some(Run {
             child: Arc::new(Mutex::new(child)),
@@ -1194,6 +1306,7 @@ impl AgentState {
     }
 
     pub fn stop(&mut self) {
+        self.unqueue();
         if self.deferred.take().is_some() {
             self.log.push(Entry::Error("Stopped.".into()));
         }
@@ -1740,7 +1853,7 @@ impl AgentState {
     }
 }
 
-fn short(v: &Value) -> String {
+pub(crate) fn short(v: &Value) -> String {
     let s = match v {
         Value::Object(m) => m
             .iter()
@@ -1757,7 +1870,7 @@ fn short(v: &Value) -> String {
     s
 }
 
-fn tool_name(n: &str) -> String {
+pub(crate) fn tool_name(n: &str) -> String {
     n.trim_start_matches("mcp__zigzag__").to_string()
 }
 
@@ -2194,6 +2307,7 @@ impl Studio {
                 // (And a note that was waiting for it goes, to it.)
                 self.visit(i, |s| {
                     s.end_turn();
+                    s.send_queued(ctx);
                     s.send_queued_notes(ctx);
                 });
             } else {
@@ -2201,11 +2315,37 @@ impl Studio {
             }
         }
         if !self.agent.running() {
+            if std::mem::take(&mut self.agent.was_running) && !self.agent_showing() {
+                self.agent.unread = true;
+            }
             self.end_turn();
+            self.send_queued(ctx);
             self.send_queued_notes(ctx);
         }
+        self.agent.was_running = self.agent.running();
         if self.agent.running() {
             ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
+    /// Its turn is over: what was written meanwhile goes now, as one
+    /// message (with the notes pinned for it, as a send would take them),
+    /// and anything being written in the box stays there.
+    fn send_queued(&mut self, ctx: &egui::Context) {
+        if self.agent.queued.is_empty() || self.agent.running() {
+            return;
+        }
+        let draft = std::mem::take(&mut self.agent.prompt);
+        self.agent.prompt = std::mem::take(&mut self.agent.queued).join("\n\n");
+        self.agent_send(ctx);
+        if self.agent.running() {
+            self.agent.prompt = draft;
+        } else {
+            // (It couldn't go: it's in the box to send again.)
+            if !draft.trim().is_empty() {
+                self.agent.prompt.push_str("\n\n");
+                self.agent.prompt.push_str(&draft);
+            }
         }
     }
 
@@ -2417,15 +2557,18 @@ impl Studio {
     }
 
     /// The transcript's height: what's left of the panel's share of its
-    /// dock (it sits at the bottom), or a good size floating.
+    /// dock (it sits at the bottom), or of a floating panel's fixed height
+    /// (queued messages and all, it stays the same size).
     fn agent_transcript_h(&self) -> f32 {
-        match self.dock_ui.pinned_h {
-            Some(h) if !self.dock_ui.in_window => {
-                let pad = crate::theme::pad().sum().y;
-                (h - crate::dock::HEADER_H - pad - self.agent.chrome_h).max(120.0)
-            }
-            _ => 380.0,
-        }
+        let h = match self.dock_ui.pinned_h {
+            Some(h) if !self.dock_ui.in_window => h,
+            _ => self
+                .dock
+                .agent_float_h
+                .min(self.dock_ui.window_max.unwrap_or(f32::INFINITY)),
+        };
+        let pad = crate::theme::pad().sum().y;
+        (h - crate::dock::HEADER_H - pad - self.agent.chrome_h).max(120.0)
     }
 
     /// Open the Agent panel (wherever it lives) with the prompt focused.
@@ -2555,7 +2698,12 @@ impl Studio {
         let mut open_earlier: Option<String> = None;
         let mut apply_choices: Option<usize> = None;
         let busy = self.agent.running();
+        let has_design = !self.doc.shapes.is_empty();
         let a = &mut self.agent;
+        // (A new chat gets new ideas.)
+        if !a.log.is_empty() {
+            a.ideas_seed = None;
+        }
         // The conversation: plain, on the panel itself.
         let transcript_h = egui::Frame::new()
             // (Room round the conversation, and between its lines.)
@@ -2611,11 +2759,8 @@ impl Studio {
                     // A little air between the ideas, and room inside each.
                     child.spacing_mut().item_spacing.y = space::S;
                     child.spacing_mut().button_padding = Vec2::new(12.0, 6.0);
-                    for idea in [
-                        "A round camp badge with a pine tree",
-                        "Make the lettering satin",
-                        "Simplify this for a 4x4 hoop",
-                    ] {
+                    let seed = *a.ideas_seed.get_or_insert_with(fresh_seed);
+                    for idea in ideas(seed, has_design) {
                         if child
                             .add(egui::Button::new(egui::RichText::new(idea).size(PANEL_PT)).corner_radius(10))
                             .clicked()
@@ -2783,6 +2928,11 @@ impl Studio {
         let has_notes = self.review.pending(self.session.rec) > 0;
         let annotating = self.review.annotating;
         let mut annotate = false;
+        // What's waiting for its turn to end, just above the prompt.
+        if !self.agent.queued.is_empty() {
+            queued_box(ui, &mut self.agent.queued, &p);
+            ui.add_space(space::S);
+        }
         // Just a divider between the conversation and the prompt.
         let (line, _) =
             ui.allocate_exact_size(Vec2::new(ui.available_width(), 1.0), Sense::hover());
@@ -2828,6 +2978,7 @@ impl Studio {
         }
         let mut field_rect = None;
         let a = &mut self.agent;
+        let busy_now = a.running();
         // (Above it, its own space; below, the panel's padding is enough.)
         let input = egui::Frame::new()
             .inner_margin(egui::Margin {
@@ -2891,8 +3042,12 @@ impl Studio {
                             .align(egui::Align2::LEFT_CENTER)
                             .font(egui::FontId::proportional(crate::review::FIELD_PT))
                             .hint_text(
-                                egui::RichText::new("Describe a design, or a change…")
-                                    .color(crate::review::hint_color(p)),
+                                egui::RichText::new(if busy_now {
+                                    "Add to what it's doing: sent when it's done…"
+                                } else {
+                                    "Describe a design, or a change…"
+                                })
+                                .color(crate::review::hint_color(p)),
                             )
                             // (Enter sends, below; Shift-Enter is the
                             // field's own new line, at the caret.)
@@ -3020,9 +3175,16 @@ impl Studio {
             )));
             return;
         }
-        if (self.agent.prompt.trim().is_empty() && !has_notes && self.agent.attach.is_empty())
-            || self.agent.running()
-        {
+        // Written while it works: it goes when the turn is done.
+        if self.agent.running() {
+            let text = self.agent.prompt.trim().to_string();
+            if !text.is_empty() {
+                self.agent.queued.push(text);
+                self.agent.prompt.clear();
+            }
+            return;
+        }
+        if self.agent.prompt.trim().is_empty() && !has_notes && self.agent.attach.is_empty() {
             return;
         }
         let addr = self.mcp.as_ref().map(|m| m.addr);
@@ -3071,6 +3233,105 @@ impl Studio {
                 .collect();
             self.agent.work.note("get_design", &sel);
         }
+    }
+}
+
+/// The most queued messages listed at once (the rest are counted).
+const QUEUED_SHOWN: usize = 3;
+
+/// The messages waiting for the agent's turn to end: a darker box along
+/// the top of the prompt, as wide as it, one line each (a × to take it
+/// back on the one under the pointer), divided by hairlines; the first
+/// few, then how many more.
+fn queued_box(ui: &mut egui::Ui, queued: &mut Vec<String>, p: &crate::theme::Pal) {
+    const ROW_H: f32 = 30.0;
+    const MORE_H: f32 = 26.0;
+    const X: f32 = 16.0;
+    let shown = queued.len().min(QUEUED_SHOWN);
+    let more = queued.len() - shown;
+    let h = shown as f32 * ROW_H + if more > 0 { MORE_H } else { 0.0 } + 2.0 * space::XS;
+    // As wide as the prompt row: from under its text to the Send button.
+    let (outer, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::hover());
+    let r = Rect::from_min_max(egui::pos2(outer.left() + space::S, outer.top()), outer.max);
+    let painter = ui.painter().clone();
+    // The dividers' and the outline's colour: darker than the box itself.
+    let groove = {
+        let k = if p.dark { 0.55 } else { 0.85 };
+        let c = p.desk;
+        Color32::from_rgb(
+            (c.r() as f32 * k) as u8,
+            (c.g() as f32 * k) as u8,
+            (c.b() as f32 * k) as u8,
+        )
+    };
+    painter.rect(r, 8.0, p.desk, Stroke::new(1.0, groove), egui::StrokeKind::Inside);
+    // The text's column, and the ×'s.
+    let left = r.left() + space::M;
+    let right = r.right() - space::S;
+    let line = |y: f32| {
+        painter.hline(r.x_range().shrink(1.0), y, Stroke::new(1.0, groove));
+    };
+    let mut gone = None;
+    let mut y = r.top() + space::XS;
+    for (k, text) in queued.iter().enumerate().take(shown) {
+        let row = Rect::from_min_max(egui::pos2(left, y), egui::pos2(right, y + ROW_H));
+        // A hairline between each and the one above it.
+        if k > 0 {
+            line(row.top());
+        }
+        let x = Rect::from_center_size(
+            egui::pos2(right - X / 2.0, row.center().y),
+            Vec2::splat(X),
+        );
+        let label = Rect::from_min_max(row.min, egui::pos2(x.left() - space::S, row.max.y));
+        // (In a child of its own: placed by the parent, it would move the
+        // parent's cursor back up to it.)
+        let mut cell = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(label)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        cell.add(
+            egui::Label::new(
+                egui::RichText::new(text.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .size(PANEL_PT)
+                    .color(p.text),
+            )
+            .truncate(),
+        )
+        .on_hover_text(text.as_str());
+        // Its × only while the pointer's on it (the whole row, edge to edge).
+        let over = ui.rect_contains_pointer(Rect::from_x_y_ranges(r.x_range(), row.y_range()));
+        let xr = ui.interact(x, ui.make_persistent_id(("queued-x", k)), Sense::click());
+        xr.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Button, true, "Remove Queued Message")
+        });
+        if over {
+            painter.circle_filled(
+                x.center(),
+                X / 2.0,
+                if xr.hovered() { p.text } else { p.secondary },
+            );
+            icons::paint(&painter, x.shrink(4.5), Icon::Close, p.desk);
+        }
+        if over && xr.on_hover_text("Don't send this").clicked() {
+            gone = Some(k);
+        }
+        y += ROW_H;
+    }
+    if more > 0 {
+        line(y);
+        painter.text(
+            egui::pos2(left, y + MORE_H / 2.0),
+            egui::Align2::LEFT_CENTER,
+            format!("{more} more"),
+            egui::FontId::proportional(PANEL_PT - 1.0),
+            p.tertiary,
+        );
+    }
+    ui.advance_cursor_after_rect(outer);
+    if let Some(k) = gone {
+        queued.remove(k);
     }
 }
 
@@ -4384,6 +4645,136 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_while_the_panel_is_put_away_is_marked_unread() {
+        let mut h = studio();
+        h.run_steps(1);
+        assert!(!h.state().agent_showing(), "tests start with it put away");
+        h.state_mut().agent.start_fake_run();
+        h.run_steps(2);
+        assert!(h.state().agent.running());
+        assert!(!h.state().agent.unread, "not while it works");
+        h.state_mut().agent.stop();
+        h.run_steps(2);
+        assert!(h.state().agent.unread, "its turn ended out of sight");
+        // Opened: read.
+        h.state_mut().ask_agent();
+        h.run_steps(2);
+        assert!(h.state().agent_showing());
+        assert!(!h.state().agent.unread);
+        // A turn that ends in view isn't unread.
+        h.state_mut().agent.start_fake_run();
+        h.run_steps(2);
+        h.state_mut().agent.stop();
+        h.run_steps(2);
+        assert!(!h.state().agent.unread);
+    }
+
+    /// What's written while the agent works waits, and goes as one message
+    /// when its turn ends; what's being written then stays in the box.
+    #[test]
+    fn messages_written_while_it_works_go_when_its_turn_ends() {
+        let _env = AGENT_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("tl-queue-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("claude");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nread -r p\nsleep 0.4\necho '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\"}'\n\
+             echo '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"num_turns\":1,\"duration_ms\":10}'\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        unsafe { std::env::set_var("ZIGZAG_CLAUDE", &fake) };
+        let mut h = studio();
+        h.state_mut().agent.kind = AgentKind::Claude;
+        h.state_mut().agent.config = None;
+        h.state_mut().mcp = Some(
+            crate::mcp::start(0, crate::tools::tool_specs(), String::new(), || {}).unwrap(),
+        );
+        let ctx = h.ctx.clone();
+        let send = |h: &mut egui_kittest::Harness<'static, Studio>, text: &str| {
+            h.state_mut().agent.prompt = text.into();
+            h.state_mut().agent_send(&ctx);
+        };
+        send(&mut h, "make a badge");
+        assert!(h.state().agent.running());
+        send(&mut h, "in blue");
+        send(&mut h, "and bigger");
+        assert_eq!(h.state().agent.queued, ["in blue", "and bigger"]);
+        assert!(h.state().agent.prompt.is_empty());
+        h.state_mut().agent.prompt = "half wri".into();
+        let said = |h: &egui_kittest::Harness<'static, Studio>| -> Vec<String> {
+            h.state()
+                .agent
+                .log
+                .iter()
+                .filter_map(|e| match e {
+                    Entry::You(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        for _ in 0..300 {
+            h.run_steps(1);
+            if said(&h).len() == 2 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(said(&h), ["make a badge", "in blue\n\nand bigger"]);
+        assert!(h.state().agent.queued.is_empty());
+        assert_eq!(h.state().agent.prompt, "half wri", "the draft stays");
+        h.state_mut().agent.stop();
+        unsafe { std::env::remove_var("ZIGZAG_CLAUDE") };
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Whether one of the ideas an empty chat starts from is on screen.
+    fn an_idea_shows(h: &egui_kittest::Harness<'static, Studio>) -> bool {
+        use egui_kittest::kittest::Queryable;
+        NEW_IDEAS
+            .iter()
+            .chain(CHANGE_IDEAS)
+            .any(|i| h.query_by_label(i).is_some())
+    }
+
+    /// Three ideas, none twice; with a design open, one of them a change
+    /// to it; and not the same three every time.
+    #[test]
+    fn an_empty_chat_shows_three_ideas_picked_at_random() {
+        let mut seen = std::collections::HashSet::new();
+        for seed in 0..200u64 {
+            let open = ideas(seed, true);
+            assert_eq!(open.len(), 3);
+            assert_eq!(open.iter().collect::<std::collections::HashSet<_>>().len(), 3);
+            assert_eq!(open.iter().filter(|i| CHANGE_IDEAS.contains(i)).count(), 1);
+            let empty = ideas(seed, false);
+            assert!(empty.iter().all(|i| NEW_IDEAS.contains(i)), "{empty:?}");
+            seen.extend(open);
+        }
+        assert!(seen.len() > 20, "most of them come up: {}", seen.len());
+        assert_ne!(ideas(1, true), ideas(2, true));
+        assert_ne!(fresh_seed(), fresh_seed());
+    }
+
+    /// Stopped, what was waiting comes back to the prompt box, before what
+    /// was being written.
+    #[test]
+    fn a_stop_puts_what_was_queued_back_in_the_box() {
+        let mut a = AgentState::default();
+        a.start_fake_run();
+        a.queued = vec!["first".into(), "second".into()];
+        a.prompt = "draft".into();
+        a.stop();
+        assert!(a.queued.is_empty());
+        assert_eq!(a.prompt, "first\n\nsecond\n\ndraft");
+    }
+
+    #[test]
     fn runs_an_agent_program_and_streams_its_output() {
         let _env = AGENT_ENV.lock().unwrap_or_else(|e| e.into_inner());
         // A stand-in for `claude`: echoes stream-json and checks its stdin.
@@ -4484,8 +4875,7 @@ mod tests {
         assert!(prompt.bottom() > 900.0 - 140.0, "{prompt:?}");
         assert!(h.query_by_label("Agent panel divider").is_none());
         assert!(
-            h.query_by_label("A round camp badge with a pine tree")
-                .is_some()
+            an_idea_shows(&h)
         );
         // Sharing the dock, it sits at the bottom, under the other panel.
         h.state_mut()
@@ -4589,8 +4979,7 @@ mod tests {
         }
         h.get_by_label_contains("Sign in with ChatGPT");
         assert!(
-            h.query_by_label("A round camp badge with a pine tree")
-                .is_none(),
+            !an_idea_shows(&h),
             "setup instead of ideas"
         );
         assert!(
@@ -4605,8 +4994,7 @@ mod tests {
         h.run_steps(3);
         assert_eq!(h.state().agent.kind, AgentKind::Claude);
         assert!(
-            h.query_by_label("A round camp badge with a pine tree")
-                .is_some(),
+            an_idea_shows(&h),
             "installed: the usual start"
         );
         // Its own steps when it's missing.
@@ -4681,7 +5069,7 @@ mod tests {
         );
         // Neither speaks of a Mac, Homebrew or the Terminal app.
         for os in [Os::Windows, Os::Linux] {
-            for kind in AgentKind::ALL {
+            for kind in [AgentKind::Codex, AgentKind::Claude] {
                 let text = all_text(os, kind);
                 for mac in ["Mac", "brew", "Homebrew", "Terminal"] {
                     assert!(!text.contains(mac), "{os:?} {kind:?}: {text}");

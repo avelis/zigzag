@@ -7,6 +7,7 @@ pub mod more;
 pub mod pec_data;
 pub mod pen;
 pub mod pes;
+pub mod plan;
 pub mod preview;
 pub mod read;
 pub mod worksheet;

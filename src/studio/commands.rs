@@ -25,6 +25,8 @@ pub enum Action {
     Save,
     SaveAs,
     Export(&'static str),
+    /// File › Share…: a page for the design at zigzag.diy.
+    Share,
     SendToSkitch,
     Undo,
     Redo,
@@ -239,6 +241,7 @@ pub fn menus() -> Vec<(&'static str, Vec<Entry>)> {
                 Item(Action::Save, "Save", cmd(Key::S)),
                 Item(Action::SaveAs, "Save As…", cmd_shift(Key::S)),
                 Sep,
+                Item(Action::Share, "Share…", None),
                 Sub("Export", export),
                 Item(Action::SendToSkitch, "Send to Skitch…", None),
             ]
@@ -647,6 +650,7 @@ impl Studio {
             | Action::CleanUp
             | Action::SimplifyDesign => !self.doc.shapes.is_empty(),
             Action::Export(_) | Action::PlayPause => has_design,
+            Action::Share => !self.doc.shapes.is_empty(),
             // (Only for a machine ZigZag sends to.)
             Action::SendToSkitch => has_design && self.sends_direct(),
             Action::FlipH
@@ -771,6 +775,7 @@ impl Studio {
             }
             Action::SaveAs => self.save_as_dialog(),
             Action::Export(ext) => self.export_dialog(ext),
+            Action::Share => self.open_share(),
             Action::SendToSkitch => self.send_action(),
             Action::Undo => self.pending_history = Some(History::Undo),
             Action::Redo => self.pending_history = Some(History::Redo),

@@ -56,6 +56,10 @@ pub enum Icon {
     Eye,
     /// A padlock: locked.
     Lock,
+    /// Public: anyone can see it.
+    Globe,
+    /// Rename.
+    Pencil,
     /// Panels, for the icon strip: stacked layers, a zigzag, a transform
     /// box, swatches, a page.
     Layers,
@@ -1063,6 +1067,30 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, c: Color32) {
             p.add(Shape::line(lid(-1.0), s));
             p.add(Shape::line(lid(1.0), s));
             p.circle_filled(at(0.5, 0.5), side * 0.13, c);
+        }
+        Icon::Globe => {
+            p.circle_stroke(at(0.5, 0.5), 0.4 * side, s);
+            // A meridian, and the equator.
+            let ring: Vec<Pos2> = (0..=24)
+                .map(|k| {
+                    let a = k as f32 / 24.0 * 2.0 * PI;
+                    at(0.5 + 0.17 * a.cos(), 0.5 + 0.4 * a.sin())
+                })
+                .collect();
+            p.add(Shape::line(ring, s));
+            line(&[(0.1, 0.5), (0.9, 0.5)]);
+        }
+        Icon::Pencil => {
+            // A pencil on the diagonal: its body, and the point.
+            line(&[
+                (0.66, 0.16),
+                (0.84, 0.34),
+                (0.34, 0.84),
+                (0.14, 0.86),
+                (0.16, 0.66),
+                (0.66, 0.16),
+            ]);
+            line(&[(0.56, 0.26), (0.74, 0.44)]);
         }
         Icon::Lock => {
             p.rect_filled(

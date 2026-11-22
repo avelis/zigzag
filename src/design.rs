@@ -4144,6 +4144,8 @@ fn plan_shown(name: &str, shapes: &[Shape], opt: &PlanOptions, cache: &mut PlanC
                 let mut known: HashMap<Step, bool> = HashMap::new();
                 let mut best: Option<(usize, PieceOrder)> = None;
                 let (mut expected, mut searches) = (None, 0);
+                // (The steps those searches took between them.)
+                let mut searched = 0;
                 for _ in 0..ORDER_SEARCHES {
                     let Some(plan) = column_order(
                         &group,
@@ -4170,7 +4172,8 @@ fn plan_shown(name: &str, shapes: &[Shape], opt: &PlanOptions, cache: &mut PlanC
                     if best.as_ref().is_none_or(|b| cuts < b.0) {
                         best = Some((cuts, plan.order));
                     }
-                    if cuts == plan.expected || !learned {
+                    searched += plan.searched;
+                    if cuts == plan.expected || !learned || searched >= ORDER_SEARCH_STEPS {
                         break;
                     }
                 }
@@ -4664,6 +4667,12 @@ const ORDER_BUDGET: usize = 30_000;
 /// a bound on the time. (Most of the census's letters stop after one;
 /// a few dozen go on, and one or two take all of these.)
 const ORDER_SEARCHES: usize = 50;
+/// The most steps those searches take between them: a bound on the time
+/// for a satin of many letters (a line of type), where each search can use
+/// all of [`ORDER_BUDGET`] and the next learns little (2026-11-21: a 38
+/// column line searched 50 times over in 9 s, none better than the first).
+/// Over the letter census no satin comes near it.
+const ORDER_SEARCH_STEPS: usize = 5 * ORDER_BUDGET;
 
 /// An order to sew a satin's pieces in: each piece, whether it's sewn
 /// from its other end, and where it leaves the thread if not where its
@@ -4675,6 +4684,8 @@ type PieceOrder = Vec<(usize, bool, Option<P>)>;
 /// each came to, tried out: see [`Step`]), and the order going to the
 /// nearest piece each time would take (`first`), for comparison.
 struct ColumnPlan {
+    /// How many steps its search took (see [`ORDER_BUDGET`]).
+    searched: usize,
     order: PieceOrder,
     steps: Vec<Step>,
     expected: usize,
@@ -4782,6 +4793,7 @@ fn column_order(
         })
         .collect();
     Some(ColumnPlan {
+        searched: found.searched,
         order: as_pieces(&found.order),
         steps,
         expected: found.cuts,
@@ -4957,6 +4969,8 @@ struct ColumnWay {
 /// the nearest each time would take (`first`), likewise.
 struct ColumnOrder {
     cuts: usize,
+    /// How many steps the search took.
+    searched: usize,
     order: Vec<usize>,
     first: Vec<usize>,
 }
@@ -5058,6 +5072,7 @@ fn fewest_cuts(
     let mut here = from;
     let mut found = ColumnOrder {
         cuts: 0,
+        searched: 0,
         order: Vec::with_capacity(n),
         first: Vec::with_capacity(n),
     };
@@ -5106,6 +5121,7 @@ fn fewest_cuts(
             usize::MAX,
         )?;
         found.cuts += one.cuts;
+        found.searched += one.searched;
         here = one.order.last().map(|&w| ways[w].end).or(here);
         found.order.extend(one.order.iter().map(|&w| which[w]));
         found.first.extend(one.first.iter().map(|&w| which[w]));
@@ -5251,6 +5267,8 @@ fn letter_cuts(
         known: &'a HashMap<Step, bool>,
         before: usize,
         budget: usize,
+        /// The steps taken.
+        steps: usize,
         /// Only orders of fewer cuts than this are wanted.
         below: usize,
         first: Option<(usize, Vec<usize>)>,
@@ -5297,6 +5315,7 @@ fn letter_cuts(
                 }
             }
             self.budget = self.budget.saturating_sub(1);
+            self.steps += 1;
             if self.path.len() == self.count {
                 let last = &self.ways[*self.path.last().unwrap()];
                 let cuts = cuts + self.reaches_next.is_some_and(|f| !f(last.end)) as usize;
@@ -5358,6 +5377,7 @@ fn letter_cuts(
     let mut order: Vec<usize> = Vec::with_capacity(n);
     let mut first_order: Vec<usize> = Vec::with_capacity(n);
     let mut total = 0;
+    let mut searched = 0;
     while !letters.is_empty() {
         let reach = |letter: &Vec<usize>| {
             here.map_or(0.0, |p| {
@@ -5389,6 +5409,7 @@ fn letter_cuts(
             // order it finds in that time. In the order drawn, there are
             // only a few ways to each.)
             budget: if drawn { usize::MAX } else { ORDER_BUDGET },
+            steps: 0,
             below,
             first: None,
             best: None,
@@ -5396,6 +5417,7 @@ fn letter_cuts(
             seen: std::collections::HashMap::new(),
         };
         search.go(here, sewn, 0);
+        searched += search.steps;
         let (first, (cuts, path)) = (search.first?, search.best?);
         total += cuts;
         first_order.extend(first.1);
@@ -5408,6 +5430,7 @@ fn letter_cuts(
     }
     Some(ColumnOrder {
         cuts: total,
+        searched,
         order,
         first: first_order,
     })
