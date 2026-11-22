@@ -44,6 +44,7 @@ mod path_edit;
 mod path_tools;
 mod pen;
 mod perf_bench;
+mod plan_keep;
 mod planner;
 mod profile;
 mod review;

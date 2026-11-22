@@ -164,11 +164,48 @@ pub fn float_w(p: PanelId) -> f32 {
 /// a dragged panel opens an empty dock there to drop into.
 const DOCK_EDGE: f32 = 32.0;
 
+/// An on/off item in a panel's menu: its words where the other items'
+/// are, a box at the far right with a tick when it's on, and the whole
+/// row to click.
+fn menu_toggle(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
+    // (A menu's items fill its width; this one asks for room at the right
+    // for the box, beyond its words.)
+    let words = egui::WidgetText::from(label)
+        .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button)
+        .size()
+        .x;
+    let pad = ui.spacing().button_padding.x;
+    let size = ui.spacing().icon_width;
+    let resp = ui.add(egui::Button::new(label).min_size(Vec2::new(words + 2.0 * pad + 3.0 * size, 0.0)));
+    if resp.clicked() {
+        *on = !*on;
+    }
+    let r = Rect::from_center_size(
+        egui::pos2(
+            resp.rect.right() - pad - size / 2.0,
+            resp.rect.center().y,
+        ),
+        Vec2::splat(size),
+    );
+    let v = ui.visuals().widgets.inactive;
+    ui.painter()
+        .rect(r, v.corner_radius, v.bg_fill, v.bg_stroke, egui::StrokeKind::Inside);
+    if *on {
+        icons::paint(ui.painter(), r.shrink(2.0), Icon::Check, ui.visuals().strong_text_color());
+    }
+    let state = *on;
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, state, label));
+    resp
+}
+
 /// Panel interaction that isn't saved: the open flyout, a panel being
 /// dragged, and where things were drawn this frame (for dropping).
 #[derive(Default)]
 pub struct DockUi {
     pub flyout: Option<PanelId>,
+    /// A panel's menu held open for a screenshot (capture mode's
+    /// `ZIGZAG_CAPTURE_SHOW=agent-menu`).
+    pub peek_menu: Option<PanelId>,
     drag: Option<PanelDrag>,
     /// Panels drawn this frame: (where, which, whole panel rect).
     drawn: Vec<(Place, PanelId, Rect)>,
@@ -274,6 +311,10 @@ pub struct DockState {
     /// as the Threads panel does and embroidery software's object lists.
     /// Off by default: what's on top is at the top, as in Illustrator.
     pub layers_sewing_order: bool,
+    /// The floating Agent panel steps out of the way when you click the
+    /// canvas or pick another tool (its menu's Auto-Hide); the
+    /// Agent button brings it back. On by default.
+    pub agent_auto_hide: bool,
     /// Where each panel lives.
     pub place: [Place; N],
     /// Panel order within the docks.
@@ -333,6 +374,7 @@ impl Default for DockState {
             collapsed: [false; N],
             show_palette: false,
             layers_sewing_order: false,
+            agent_auto_hide: true,
             units: Default::default(),
             place: ALL.map(default_place),
             order: ALL.to_vec(),
@@ -457,6 +499,7 @@ impl DockState {
         d.right = v["right"].as_bool().unwrap_or(true);
         d.show_palette = v["show_palette"].as_bool().unwrap_or(false);
         d.layers_sewing_order = v["layers_sewing_order"].as_bool().unwrap_or(false);
+        d.agent_auto_hide = v["agent_auto_hide"].as_bool().unwrap_or(true);
         d.units = v["units"]
             .as_str()
             .and_then(crate::units::Unit::named)
@@ -554,6 +597,7 @@ impl DockState {
             "right": self.right,
             "show_palette": self.show_palette,
             "layers_sewing_order": self.layers_sewing_order,
+            "agent_auto_hide": self.agent_auto_hide,
             "units": self.units.suffix(),
             "task_bar": self.task_bar,
             "agent_share": self.agent_share,
@@ -687,11 +731,12 @@ impl DockState {
     pub fn reset_layout(&mut self) {
         let path = self.path.take();
         let (show_palette, units) = (self.show_palette, self.units);
-        let layers_sewing_order = self.layers_sewing_order;
+        let (layers_sewing_order, agent_auto_hide) = (self.layers_sewing_order, self.agent_auto_hide);
         *self = DockState {
             path,
             show_palette,
             layers_sewing_order,
+            agent_auto_hide,
             units,
             ..DockState::default()
         };
@@ -1054,6 +1099,12 @@ impl Studio {
         mresp.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{} menu", id.title()))
         });
+        // (Held open, for a screenshot that only shows it.)
+        if self.dock_ui.peek_menu == Some(id)
+            && !egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&mresp))
+        {
+            egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&mresp));
+        }
         let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&mresp));
         if mresp.hovered() || open {
             ui.painter().rect_filled(mrect, 4.0, p.hover);
@@ -1177,28 +1228,32 @@ impl Studio {
                         self.agent.new_chat();
                         ui.close();
                     }
+                    // (Floating over the canvas, it can step out of the way.)
+                    if self.dock.place_of(key) == Place::Float {
+                        if menu_toggle(ui, &mut self.dock.agent_auto_hide, "Auto-Hide")
+                            .on_hover_text(
+                                "Put the panel away when you click the canvas or pick another tool. The Agent button brings it back, with a dot when there's a reply.",
+                            )
+                            .clicked()
+                        {
+                            ui.close();
+                        }
+                    }
                     ui.separator();
                 }
                 if id == PanelId::Objects {
-                    let on = self.dock.layers_sewing_order;
-                    if ui
-                        .add(egui::Button::new("List in Sewing Order").selected(on))
+                    if menu_toggle(ui, &mut self.dock.layers_sewing_order, "List in Sewing Order")
                         .on_hover_text(
                             "List the layers as they sew, the first at the top. Off: what's on top is at the top, as in Illustrator.",
                         )
                         .clicked()
                     {
-                        self.dock.layers_sewing_order = !on;
                         ui.close();
                     }
                     ui.separator();
                 }
                 if id == PanelId::Threads {
-                    if ui
-                        .add(egui::Button::new("Show Palette").selected(self.dock.show_palette))
-                        .clicked()
-                    {
-                        self.dock.show_palette = !self.dock.show_palette;
+                    if menu_toggle(ui, &mut self.dock.show_palette, "Show Palette").clicked() {
                         ui.close();
                     }
                     let name = self.palettes.name(self.palettes.source);

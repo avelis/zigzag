@@ -867,6 +867,15 @@ A filled detail needs to be at least about 1.5 mm across and a satin column 1 to
 so shade with separate shapes in a few related colors instead. Build a drawing in layers as an illustrator would: \
 base shapes, then shading and highlights laid on top, then lines; trace curves with real bezier curves, not a few \
 straight points. If a subject needs more detail than its size can hold, make it bigger rather than leave the detail out. \
+Sew it as an embroiderer would: keep underlay and the fabric's usual spacing on everything meant to cover (don't turn \
+underlay off or open up the rows to save stitches: the cloth shows through and puckers); give each fill its own direction, \
+along its length where it has one and at least 30° from the pieces it touches and the ground it sits on, never everything at \
+the default 0°; keep a background or patch ground to one plain fill, which may be lighter (up to twice the usual spacing) but \
+keeps its underlay, with nothing sewn across it that isn't part of the picture; sew a patch's satin border last, 3 to 5 mm \
+wide; keep lettering at least 5 mm tall (6.5 mm on a cap); and leave Sew over fill off unless the person asks for it: a trim \
+costs less than a line of thread across finished stitching. Trim settings already on when you start (Sew over fill, \
+Connect, Blend) are the person's: never turn them off to clear notes or tidy the stitching, since each saves trims and \
+taking it away can double them; if their lines look like a problem, offer it as a choice with what it costs in trims. \
 Pass terse: true on tools that change the design (the short answer names what was added and any new problems; get_design has the rest when you need it). \
 After making changes, call render_preview to look at the stitches, and with artwork true to see your drawing itself; \
 zoom in with region or object to check the details, refine what looks crude. \
@@ -887,7 +896,7 @@ Don't save or export unless asked. Finish with one or two sentences on what you 
 
 /// For an agent that can generate images (Codex): draw pictures by
 /// generating one and tracing it, which often beats hand-written SVG.
-const IMAGE_BRIEF: &str = "For a pictorial subject (an animal, a person or character, a scene, a detailed object), generate an image and trace it rather than writing its SVG yourself: traced shapes are far more natural and detailed than hand-written ones. That goes for a picture already in the design that should be more detailed or more natural too: generate a new image that matches it (its pose, proportions and colors, from a close look at it), trace it at the old one's size and place, and delete the old one once the new one is in. Make the image for sewing, not for the screen. Every color is a thread change and every separate piece of a color is a jump the machine trims, so first read the design's threads (get_design) and ask for the picture in those exact colors, giving their hex values; add a new color only where the subject can't do without it, and then a shade near one already in the design where you can (a tan beside a cream, not a new brown). Shading and highlights are wanted: they're what makes a picture look drawn rather than cut out. Ask for them as solid shapes in darker and lighter shades of its base colors (a design thread a shade off where there is one), such as a shadow down a flank, a lighter muzzle or the far legs in a darker tone, each a clear shape of its own rather than a gradient, mottling or many small flecks. Ask for a flat illustration in solid colors, at most 6 to 8 in all, no gradients, textures, cast shadows, outlines in a color of their own or fine hatching; each color in clear shapes, not scattered specks; bold shapes with clean edges; the subject alone on a plain white background. Then call trace_image with the image's absolute path, palette \"design\" (so its colors become the design's threads), threads for the machine's thread chart (for any new color), lines true if it has line details, and width_mm, x_mm and y_mm for its size and place. Its answer gives new_colors and the trims before and after: recolor a piece in a color that isn't needed to the design thread it's nearest (set_object color). To bring trims down, delete only stray bits and specks too small to sew; never take out shading, highlights or features to save trims: a few more trims for a picture that reads well is the right trade. Change the document's connect_mm or over_sewn only as review_design's what_ifs say: one that saves trims without showing (shows false) you set, and say so; one whose thread shows is the person's to choose, so offer it with offer_choices, saying what it saves and what shows. Then look at it close up with render_preview's artwork and region, and fix what the trace got wrong (stray bits, colors, stitch types). Write SVG yourself for logos, badges, lettering and simple geometric shapes, where exact shapes matter.";
+const IMAGE_BRIEF: &str = "For a pictorial subject (an animal, a person or character, a scene, a detailed object), generate an image and trace it rather than writing its SVG yourself: traced shapes are far more natural and detailed than hand-written ones. That goes for a picture already in the design that should be more detailed or more natural too: generate a new image that matches it (its pose, proportions and colors, from a close look at it), trace it at the old one's size and place, and delete the old one once the new one is in. Make the image for sewing, not for the screen. Every color is a thread change and every separate piece of a color is a jump the machine trims, so first read the design's threads (get_design) and ask for the picture in those exact colors, giving their hex values; add a new color only where the subject can't do without it, and then a shade near one already in the design where you can (a tan beside a cream, not a new brown). Shading and highlights are wanted: they're what makes a picture look drawn rather than cut out. Ask for them as solid shapes in darker and lighter shades of its base colors (a design thread a shade off where there is one), such as a shadow down a flank, a lighter muzzle or the far legs in a darker tone, each a clear shape of its own rather than a gradient, mottling or many small flecks. Ask for a flat illustration in solid colors, at most 6 to 8 in all, no gradients, textures, cast shadows, outlines in a color of their own or fine hatching; each color in clear shapes, not scattered specks; bold shapes with clean edges; the subject alone on a plain white background. Then call trace_image with the image's absolute path, palette \"design\" (so its colors become the design's threads), threads for the machine's thread chart (for any new color), lines true if it has line details, and width_mm, x_mm and y_mm for its size and place. Its answer gives new_colors and the trims before and after: recolor a piece in a color that isn't needed to the design thread it's nearest (set_object color). To bring trims down, delete only stray bits and specks too small to sew; never take out shading, highlights or features to save trims: a few more trims for a picture that reads well is the right trade. Change the document's connect_mm or blend_mm only as review_design's what_ifs say (never over_sewn on your own): one that saves trims without showing (shows false) you set, and say so; one whose thread shows is the person's to choose, so offer it with offer_choices, saying what it saves and what shows. Then look at it close up with render_preview's artwork and region, and fix what the trace got wrong (stray bits, colors, stitch types). Write SVG yourself for logos, badges, lettering and simple geometric shapes, where exact shapes matter.";
 
 impl AgentKind {
     /// The brief for this agent: what it can do on top of the tools.
@@ -1318,6 +1327,19 @@ impl AgentState {
             self.log.push(Entry::Error("Stopped.".into()));
         }
         self.stopped = true;
+    }
+
+    /// End the turn running now to send something else at once (a queued
+    /// message's Send Now): like [`Self::stop`], but what's still queued
+    /// stays queued, and the notes waiting for it stay too.
+    pub fn interrupt(&mut self) {
+        if let Some(r) = self.run.take() {
+            if let Ok(mut c) = r.child.lock() {
+                end_run(&mut c);
+            }
+            self.settle(false);
+            self.log.push(Entry::Info("Stopped to send your message now.".into()));
+        }
     }
 
     /// The run is over: a step still marked as running isn't (it would
@@ -2349,6 +2371,36 @@ impl Studio {
         }
     }
 
+    /// A queued message's Send Now: the turn running ends, and that
+    /// message goes at once, in the same chat; the rest stay queued, for
+    /// when its turn is done.
+    fn send_queued_now(&mut self, k: usize, ctx: &egui::Context) {
+        if k >= self.agent.queued.len() {
+            return;
+        }
+        let text = self.agent.queued.remove(k);
+        // (Waiting to start, not started: it just goes first.)
+        if self.agent.deferred.is_some() {
+            self.agent.queued.insert(0, text);
+            return;
+        }
+        let rest = std::mem::take(&mut self.agent.queued);
+        if self.agent.running() {
+            self.agent.interrupt();
+            self.end_turn();
+        }
+        let draft = std::mem::replace(&mut self.agent.prompt, text);
+        self.agent_send(ctx);
+        if self.agent.running() {
+            self.agent.prompt = draft;
+        } else if !draft.trim().is_empty() {
+            // (It couldn't go: it's in the box to send again.)
+            self.agent.prompt.push_str("\n\n");
+            self.agent.prompt.push_str(&draft);
+        }
+        self.agent.queued.extend(rest);
+    }
+
     /// Run an MCP call and note which objects it touched, for the canvas.
     pub fn run_mcp_call(&mut self, name: &str, args: &Value) -> crate::mcp::ToolResult {
         let uid = |s: &Studio, i: usize| s.doc.shapes.get(i).map(|x| x.uid);
@@ -2930,7 +2982,9 @@ impl Studio {
         let mut annotate = false;
         // What's waiting for its turn to end, just above the prompt.
         if !self.agent.queued.is_empty() {
-            queued_box(ui, &mut self.agent.queued, &p);
+            if let Some(k) = queued_box(ui, &mut self.agent.queued, &p) {
+                self.send_queued_now(k, ui.ctx());
+            }
             ui.add_space(space::S);
         }
         // Just a divider between the conversation and the prompt.
@@ -2978,7 +3032,6 @@ impl Studio {
         }
         let mut field_rect = None;
         let a = &mut self.agent;
-        let busy_now = a.running();
         // (Above it, its own space; below, the panel's padding is enough.)
         let input = egui::Frame::new()
             .inner_margin(egui::Margin {
@@ -3041,13 +3094,11 @@ impl Studio {
                             .min_size(Vec2::new(field_w, button_h))
                             .align(egui::Align2::LEFT_CENTER)
                             .font(egui::FontId::proportional(crate::review::FIELD_PT))
+                            // (One hint, working or not: a longer one wrapped
+                            // to two lines, and the box jumped when typed in.)
                             .hint_text(
-                                egui::RichText::new(if busy_now {
-                                    "Add to what it's doing: sent when it's done…"
-                                } else {
-                                    "Describe a design, or a change…"
-                                })
-                                .color(crate::review::hint_color(p)),
+                                egui::RichText::new("Describe a design, or a change…")
+                                    .color(crate::review::hint_color(p)),
                             )
                             // (Enter sends, below; Shift-Enter is the
                             // field's own new line, at the caret.)
@@ -3097,7 +3148,14 @@ impl Studio {
             .response
             .rect;
         // Everything but the transcript, to size it next frame.
-        a.chrome_h = (ui.cursor().top() - top - transcript_h).max(0.0);
+        let chrome_h = (ui.cursor().top() - top - transcript_h).max(0.0);
+        // (The transcript is sized from this: when the input area grows or
+        // shrinks, draw the frame again at once rather than show one with
+        // the old size, which jolts as you type.)
+        if (chrome_h - a.chrome_h).abs() > 0.5 {
+            ui.ctx().request_discard("the Agent panel's input height");
+        }
+        a.chrome_h = chrome_h;
         // (Out of the top of the input area, as wide as it.)
         if field_rect.is_some()
             && !rows.is_empty()
@@ -3242,8 +3300,9 @@ const QUEUED_SHOWN: usize = 3;
 /// The messages waiting for the agent's turn to end: a darker box along
 /// the top of the prompt, as wide as it, one line each (a × to take it
 /// back on the one under the pointer), divided by hairlines; the first
-/// few, then how many more.
-fn queued_box(ui: &mut egui::Ui, queued: &mut Vec<String>, p: &crate::theme::Pal) {
+/// few, then how many more. Beside the ×, a send arrow (Send Now): the
+/// row it's clicked on, if it is.
+fn queued_box(ui: &mut egui::Ui, queued: &mut Vec<String>, p: &crate::theme::Pal) -> Option<usize> {
     const ROW_H: f32 = 30.0;
     const MORE_H: f32 = 26.0;
     const X: f32 = 16.0;
@@ -3272,6 +3331,7 @@ fn queued_box(ui: &mut egui::Ui, queued: &mut Vec<String>, p: &crate::theme::Pal
         painter.hline(r.x_range().shrink(1.0), y, Stroke::new(1.0, groove));
     };
     let mut gone = None;
+    let mut now = None;
     let mut y = r.top() + space::XS;
     for (k, text) in queued.iter().enumerate().take(shown) {
         let row = Rect::from_min_max(egui::pos2(left, y), egui::pos2(right, y + ROW_H));
@@ -3283,7 +3343,9 @@ fn queued_box(ui: &mut egui::Ui, queued: &mut Vec<String>, p: &crate::theme::Pal
             egui::pos2(right - X / 2.0, row.center().y),
             Vec2::splat(X),
         );
-        let label = Rect::from_min_max(row.min, egui::pos2(x.left() - space::S, row.max.y));
+        // Send Now, with room between it and the ×.
+        let send = x.translate(Vec2::new(-(X + space::M), 0.0));
+        let label = Rect::from_min_max(row.min, egui::pos2(send.left() - space::S, row.max.y));
         // (In a child of its own: placed by the parent, it would move the
         // parent's cursor back up to it.)
         let mut cell = ui.new_child(
@@ -3317,6 +3379,19 @@ fn queued_box(ui: &mut egui::Ui, queued: &mut Vec<String>, p: &crate::theme::Pal
         if over && xr.on_hover_text("Don't send this").clicked() {
             gone = Some(k);
         }
+        let sr = ui.interact(send, ui.make_persistent_id(("queued-send", k)), Sense::click());
+        sr.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Send Queued Message Now"));
+        if over {
+            painter.circle_filled(
+                send.center(),
+                X / 2.0,
+                if sr.hovered() { p.text } else { p.secondary },
+            );
+            icons::paint(&painter, send.shrink(3.5), Icon::ArrowUp, p.desk);
+        }
+        if over && sr.on_hover_text("Send now: stops what it's doing").clicked() {
+            now = Some(k);
+        }
         y += ROW_H;
     }
     if more > 0 {
@@ -3332,7 +3407,9 @@ fn queued_box(ui: &mut egui::Ui, queued: &mut Vec<String>, p: &crate::theme::Pal
     ui.advance_cursor_after_rect(outer);
     if let Some(k) = gone {
         queued.remove(k);
+        return None;
     }
+    now
 }
 
 /// The look of a piece being worked on: a soft wash, a light sweeping
@@ -4283,6 +4360,96 @@ mod tests {
     }
 
     #[test]
+    fn the_prompt_box_keeps_its_height_when_typed_in_while_it_works() {
+        use crate::dock::PanelId;
+        use egui_kittest::kittest::Queryable;
+        let mut h = studio();
+        h.state_mut().agent.config = None; // don't save the choice
+        h.state_mut().dock.reveal(PanelId::Agent);
+        h.state_mut().agent.start_fake_run();
+        h.state_mut().agent.focus = true;
+        h.run_steps(4);
+        let empty = h.get_by_label("Prompt").rect().height();
+        let chrome = h.state().agent.chrome_h;
+        h.get_by_label("Prompt").type_text("and");
+        h.run_steps(2);
+        assert_eq!(h.get_by_label("Prompt").rect().height(), empty);
+        assert_eq!(h.state().agent.chrome_h, chrome);
+        h.state_mut().agent.stop();
+    }
+
+    #[test]
+    fn return_sends_the_prompt_and_shift_return_makes_a_new_line() {
+        use crate::dock::PanelId;
+        use egui_kittest::kittest::Queryable;
+        let mut h = studio();
+        h.state_mut().agent.config = None; // don't save the choice
+        h.state_mut().agent.kind = AgentKind::Claude;
+        h.state_mut().dock.reveal(PanelId::Agent);
+        h.state_mut().agent.focus = true;
+        h.run_steps(4);
+        h.get_by_label("Prompt").type_text("a star");
+        h.run_steps(2);
+        h.key_press_modifiers(egui::Modifiers::SHIFT, Key::Enter);
+        h.run_steps(2);
+        h.get_by_label("Prompt").type_text("in gold");
+        h.run_steps(2);
+        assert_eq!(h.state().agent.prompt, "a star\nin gold");
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        // Sent: with no MCP server here, sending says so (and keeps the
+        // prompt to send again); Return made no new line.
+        assert!(
+            matches!(h.state().agent.log.last(), Some(Entry::Error(e)) if e.contains("MCP server")),
+            "Return sent it: {:?}",
+            h.state().agent.log.last()
+        );
+        assert_eq!(h.state().agent.prompt, "a star\nin gold");
+    }
+
+    #[test]
+    fn return_sends_with_an_earlier_chat_in_the_panel() {
+        use crate::dock::PanelId;
+        use egui_kittest::kittest::Queryable;
+        let mut h = studio();
+        h.state_mut().agent.config = None; // don't save the choice
+        h.state_mut().agent.kind = AgentKind::Codex;
+        h.state_mut().dock.reveal(PanelId::Agent);
+        // An earlier conversation, ending with a card of choices.
+        h.state_mut().agent.log = vec![
+            Entry::You("make a patch".into()),
+            Entry::Tool("add_svg".into(), "patch".into(), Some(true)),
+            Entry::Said("Here's the patch.".into()),
+            Entry::Done("1 min".into()),
+            Entry::Choices {
+                title: "Fewer trims".into(),
+                question: "Sew across short gaps?".into(),
+                choices: vec![Choice {
+                    label: "Connect 3 mm".into(),
+                    detail: "Fewer stops.".into(),
+                    steps: json!([]),
+                    picked: false,
+                }],
+                applied: None,
+            },
+        ];
+        h.run_steps(4);
+        h.get_by_label("Prompt").click();
+        h.run_steps(2);
+        h.get_by_label("Prompt").type_text("a star");
+        h.run_steps(2);
+        let before = h.state().agent.log.len();
+        h.key_press(Key::Enter);
+        h.run_steps(3);
+        assert!(
+            h.state().agent.log.len() > before,
+            "Return did nothing: {:?} / {:?}",
+            h.state().agent.prompt,
+            h.state().agent.log.last()
+        );
+    }
+
+    #[test]
     fn typing_a_slash_opens_the_command_menu_and_enter_runs_a_pick() {
         use crate::dock::PanelId;
         use egui_kittest::kittest::Queryable;
@@ -4728,6 +4895,84 @@ mod tests {
         assert_eq!(said(&h), ["make a badge", "in blue\n\nand bigger"]);
         assert!(h.state().agent.queued.is_empty());
         assert_eq!(h.state().agent.prompt, "half wri", "the draft stays");
+        h.state_mut().agent.stop();
+        unsafe { std::env::remove_var("ZIGZAG_CLAUDE") };
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A queued message's Send Now stops the turn and sends that one at
+    /// once, in the same chat; the rest wait for its turn to end.
+    #[test]
+    fn send_now_on_a_queued_message_stops_the_turn_and_sends_it() {
+        use egui_kittest::kittest::Queryable;
+        let _env = AGENT_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("tl-send-now-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("claude");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\nread -r p\necho '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\"}'\nsleep 1\n\
+             echo '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"num_turns\":1,\"duration_ms\":10}'\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        unsafe { std::env::set_var("ZIGZAG_CLAUDE", &fake) };
+        let mut h = studio();
+        h.state_mut().agent.kind = AgentKind::Claude;
+        h.state_mut().agent.config = None;
+        h.state_mut().dock.reveal(crate::dock::PanelId::Agent);
+        h.state_mut().mcp = Some(
+            crate::mcp::start(0, crate::tools::tool_specs(), String::new(), || {}).unwrap(),
+        );
+        let ctx = h.ctx.clone();
+        for text in ["make a badge", "in blue", "and bigger"] {
+            h.state_mut().agent.prompt = text.into();
+            h.state_mut().agent_send(&ctx);
+        }
+        assert_eq!(h.state().agent.queued, ["in blue", "and bigger"]);
+        h.state_mut().agent.prompt = "half wri".into();
+        h.run_steps(3);
+        // The first row's arrow, under the pointer.
+        let at = h.get_all_by_label("Send Queued Message Now").next().unwrap().rect().center();
+        h.hover_at(at);
+        h.run_steps(1);
+        h.drag_at(at);
+        h.run_steps(1);
+        h.drop_at(at);
+        h.run_steps(2);
+        let said = |h: &egui_kittest::Harness<'static, Studio>| -> Vec<String> {
+            h.state()
+                .agent
+                .log
+                .iter()
+                .filter_map(|e| match e {
+                    Entry::You(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(said(&h), ["make a badge", "in blue"]);
+        assert!(h.state().agent.running());
+        assert_eq!(h.state().agent.queued, ["and bigger"]);
+        assert_eq!(h.state().agent.prompt, "half wri", "the draft stays");
+        assert!(
+            h.state().agent.log.iter().any(|e| matches!(e, Entry::Info(t) if t.starts_with("Stopped to send"))),
+            "{:?}",
+            h.state().agent.log
+        );
+        // The rest goes when that turn is done.
+        for _ in 0..400 {
+            h.run_steps(1);
+            if said(&h).len() == 3 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(said(&h), ["make a badge", "in blue", "and bigger"]);
         h.state_mut().agent.stop();
         unsafe { std::env::remove_var("ZIGZAG_CLAUDE") };
         let _ = std::fs::remove_dir_all(&dir);

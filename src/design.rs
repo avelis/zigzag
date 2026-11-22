@@ -250,12 +250,17 @@ impl Backdrop<'_> {
                 if n != END && prev.dist(q) + q.dist(start) > most {
                     continue;
                 }
+                // (Each half of the step by how much it shows there: one
+                // look at its middle misses a corner it cuts.)
                 let len = p.dist(q);
-                let r = reach(self.shows_at(p.lerp(q, 0.5), start));
-                if r <= 0.0 {
+                let (r0, r1) = (
+                    reach(self.shows_at(p.lerp(q, 0.25), start)),
+                    reach(self.shows_at(p.lerp(q, 0.75), start)),
+                );
+                if r0 <= 0.0 || r1 <= 0.0 {
                     continue;
                 }
-                let ng = g + len / r;
+                let ng = g + len * 0.5 / r0 + len * 0.5 / r1;
                 if ng > budget + 1e-9 || cost.get(&n).is_some_and(|&best| ng >= best - 1e-9) {
                     continue;
                 }
@@ -3450,6 +3455,29 @@ fn plan_shown(name: &str, shapes: &[Shape], opt: &PlanOptions, cache: &mut PlanC
             .params
             .end
             .and_then(|t| outline_at(&shape.geometry, t));
+        // What a straight stitch between two of the shape's stitches is
+        // hidden under: the outline, grown by as far as a fill's rows
+        // reach past it (widened for pull) and a little more, so a row's
+        // end is inside it, not on its edge (judged on the edge, a line
+        // from one goes in or out by where its samples happen to fall,
+        // which changes when the shape is moved).
+        let row_past = if shape.params.kind == Some(Kind::Fill) {
+            mm(shape.params.fill_pull(&opt.fabric)).max(0.0)
+        } else {
+            0.0
+        };
+        let grown = |(rings, rule): &(Vec<Polyline>, FillRule)| -> (Vec<Polyline>, FillRule) {
+            if row_past > 0.0 {
+                (
+                    boolean::offset(rings, *rule, row_past + 1.0),
+                    FillRule::NonZero,
+                )
+            } else {
+                (rings.clone(), *rule)
+            }
+        };
+        let covered: std::cell::OnceCell<Option<(Vec<Polyline>, FillRule)>> =
+            std::cell::OnceCell::new();
         // This shape's stitches: kept from last time when its outline, what's
         // left of it after overlaps, its settings and the options are the same.
         let key = {
@@ -3644,12 +3672,15 @@ fn plan_shown(name: &str, shapes: &[Shape], opt: &PlanOptions, cache: &mut PlanC
             |prev: P, start: P, force_trim: bool, same_shape: bool| -> (Option<Vec<P>>, bool) {
                 let gap = prev.dist(start);
                 how.set(TravelHow::Across);
-                let inside = sr.area.as_ref().is_some_and(|(rings, rule)| {
-                    gap <= opt.travel_inside
-                        && segment_inside(rings, *rule, prev, start, 2.0)
-                        && (opt.over_sewn
-                            || crossings(&[prev, start], &fill_sewn.borrow()) <= FEW_ROWS)
-                });
+                let inside = covered
+                    .get_or_init(|| sr.area.as_ref().map(grown))
+                    .as_ref()
+                    .is_some_and(|(rings, rule)| {
+                        gap <= opt.travel_inside
+                            && segment_inside(rings, *rule, prev, start, 2.0)
+                            && (opt.over_sewn
+                                || crossings(&[prev, start], &fill_sewn.borrow()) <= FEW_ROWS)
+                    });
                 let straight = || -> Vec<P> {
                     let n = (gap / 30.0).ceil() as usize;
                     (1..n)
@@ -4218,12 +4249,15 @@ fn plan_shown(name: &str, shapes: &[Shape], opt: &PlanOptions, cache: &mut PlanC
                 && gi == last_group
                 && start_at.is_none()
                 && end_at.is_none()
-                && let Some(area) = sr.area.as_ref()
+                && let Some(area) = covered.get_or_init(|| sr.area.as_ref().map(grown)).as_ref()
                 && let Some(order) = section_order(
                     &group,
                     cursor,
                     area,
-                    travel.get_or_init(|| kept.travel_ring(&area.0, area.1)),
+                    travel.get_or_init(|| {
+                        let (rings, rule) = sr.area.as_ref().unwrap();
+                        kept.travel_ring(rings, *rule)
+                    }),
                     opt,
                 )
             {
@@ -4399,7 +4433,8 @@ fn plan_shown(name: &str, shapes: &[Shape], opt: &PlanOptions, cache: &mut PlanC
                 // starts at its nearest end).
                 if from_start
                     && let Some(st) = start_at
-                    && let Some((rings, rule)) = sr.area.as_ref()
+                    && let Some((rings, rule)) =
+                        covered.get_or_init(|| sr.area.as_ref().map(grown)).as_ref()
                     && st.dist(pts[0]) > opt.min_stitch
                     && segment_inside(rings, *rule, st, pts[0], 2.0)
                 {
@@ -7627,9 +7662,11 @@ mod tests {
             .iter()
             .flat_map(|r| r.pts.iter().copied())
             .collect();
+        // (Each row widened for pull, its ends that far past the edge.)
+        let pull = mm(Params::default().fill_pull(&PlanOptions::default().fabric));
         let edge_hits = pts
             .iter()
-            .filter(|p| p.x.abs() < 1e-6 || (p.x - 100.0).abs() < 1e-6)
+            .filter(|p| (p.x + pull).abs() < 1e-6 || (p.x - 100.0 - pull).abs() < 1e-6)
             .count();
         assert_eq!(edge_hits, 80, "40 rows × 2 ends");
         assert_eq!(d.per_shape, vec![pts.len()]);
@@ -7657,12 +7694,14 @@ mod tests {
             0,
             "no base stitches deep under the top object"
         );
-        // ...but the base still reaches 0.5 mm under its edge, so no gap shows.
+        // ...but the base still reaches 0.5 mm under its edge (and its
+        // rows a pull's width more), so no gap shows.
+        let pull = mm(Params::default().fill_pull(&PlanOptions::default().fabric));
         let near_edge = with.blocks[0]
             .runs
             .iter()
             .flat_map(|r| &r.pts)
-            .any(|p| p.x > 52.0 && p.x < 56.0 && p.y > 80.0 && p.y < 120.0);
+            .any(|p| p.x > 52.0 && p.x < 56.0 + pull && p.y > 80.0 && p.y < 120.0);
         assert!(near_edge);
     }
 
@@ -9210,10 +9249,17 @@ mod concave_fill_tests {
                 joined: Vec::new(),
             };
             let d = plan("t", &[s], &PlanOptions::default());
+            // (Rows widened for pull reach that far past the outline, a
+            // notch's sides included: the notch sewn that much narrower
+            // comes out its own width.)
+            let pull = mm(Params::default().fill_pull(&PlanOptions::default().fabric));
+            let m0 = 1.0 + pull;
             for r in d.blocks.iter().flat_map(|b| &b.runs) {
                 for w in r.pts.windows(2) {
                     let m = w[0].lerp(w[1], 0.5);
-                    let in_notch = m.x > 302.0 && m.x < 334.0 && (m.y < 104.0 || m.y > 134.0);
+                    let in_notch = m.x > 301.0 + m0
+                        && m.x < 335.0 - m0
+                        && (m.y < 106.0 - m0 || m.y > 132.0 + m0);
                     assert!(
                         !in_notch,
                         "angle {angle}: stitch {:?} -> {:?} crosses a notch",

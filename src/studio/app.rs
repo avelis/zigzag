@@ -151,6 +151,13 @@ pub struct Studio {
     /// What `review_design` found other settings would come to, for the
     /// design as it stood (document, revision, trims): see `trim_what_ifs`.
     pub(crate) what_ifs: std::cell::RefCell<Option<((u32, u64, usize), Vec<serde_json::Value>)>>,
+    /// The trim settings (over_sewn, connect_mm, blend_mm) the agent turned
+    /// on itself, per document (its recovery number): review_design asks it
+    /// to undo those where their thread shows, and leaves the person's own
+    /// choices (from a card of choices, or the Document panel) alone.
+    pub(crate) agent_set: std::collections::HashMap<u32, std::collections::HashSet<&'static str>>,
+    /// A card of choices is being applied: what it sets is the person's.
+    pub(crate) person_choosing: bool,
     pub names: Vec<String>,
     pub(crate) dirty: bool,
     pub(crate) plan_ms: f64,
@@ -396,6 +403,13 @@ impl Studio {
                 Ok("marquee") => s.marquee = Some((P::new(-220.0, -120.0), P::new(60.0, 90.0))),
                 // The windows about ZigZag itself.
                 Ok("about") => s.about = true,
+                // The floating Agent panel with its menu open.
+                Ok("agent-menu") => {
+                    use crate::dock::{PanelId, Place};
+                    s.dock.move_panel(PanelId::Agent, Place::Float, None);
+                    s.dock.reveal(PanelId::Agent);
+                    s.dock_ui.peek_menu = Some(PanelId::Agent);
+                }
                 // File › Share… on the design.
                 Ok("share") => {
                     s.open_share();
@@ -660,6 +674,8 @@ impl Studio {
             route_drag: None,
             route_active: None,
             what_ifs: Default::default(),
+            agent_set: Default::default(),
+            person_choosing: false,
             names: Vec::new(),
             dirty: true,
             plan_ms: 0.0,
@@ -836,6 +852,11 @@ impl Studio {
         if self.agent.log.is_empty() && !self.agent.running() {
             self.agent.forget_document();
         }
+    }
+
+    /// The plan shown is of the document as it is now.
+    pub(crate) fn plan_is_current(&self) -> bool {
+        !self.dirty && !self.planner.pending && !self.plan_cut
     }
 
     pub fn replan(&mut self) {
@@ -2634,9 +2655,27 @@ impl Studio {
         }
     }
 
+    /// Put the floating Agent panel away (its menu's Auto-Hide):
+    /// when the canvas is clicked or another tool picked.
+    pub(crate) fn auto_hide_agent(&mut self) {
+        use crate::dock::{PanelId, Place};
+        let p = PanelId::Agent;
+        if self.dock.agent_auto_hide
+            && self.dock.place_of(p) == Place::Float
+            && self.dock.visible(p)
+        {
+            self.dock.toggle(p);
+        }
+    }
+
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let rect = resp.rect;
+        // Working on the canvas puts a floating Agent panel away, if that's
+        // asked for (not while pinning notes for it).
+        if !self.review.annotating && (resp.clicked() || resp.drag_started()) {
+            self.auto_hide_agent();
+        }
         // Pinning notes: clicks and drags are for that, not the tools
         // (this sits over the canvas, so the tools' response sees none).
         let notes = self.review.annotating.then(|| {

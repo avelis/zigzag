@@ -131,6 +131,15 @@ impl Planner {
         self.slow = true;
     }
 
+    /// A document came to the front: whether its plans are slow.
+    pub fn entered(&mut self, slow: bool) {
+        #[cfg(test)]
+        if !self.timed {
+            return;
+        }
+        self.slow = slow;
+    }
+
     /// A synchronous plan was just made: anything still out is stale.
     pub fn superseded(&mut self) {
         self.generation += 1;

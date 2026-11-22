@@ -1,21 +1,27 @@
 # Changelog
 
-## 0.1.8 — 2026-11-21
+## 0.1.9 — 2026-11-21
 
-- File › Share… puts a design on zigzag.diy: a page with its picture, a
-  stitch player and downloads for every machine, for anyone, for people
-  with the link, or only you.
-- The Open button on a zigzag.diy page opens the design in ZigZag.
-- Sign in under Settings › Account and your machines, palettes and thread
-  chart follow you between computers.
-- Variable fonts are drawn at any weight.
-- Messages written while the agent works wait and go when its turn ends.
-- A long line of satin lettering plans in a moment instead of seconds.
+- The agent reviews a design as an embroiderer would before it finishes:
+  underlay, rows close enough to cover the fabric, fills that don't all
+  run one way, empty outlines, the patch border, lettering size, and
+  specks left by a trace.
+- Trim settings you chose (Sew over fill, Connect, Blend) are left as you
+  set them, and Issues no longer flags the thread they sew in sight.
+- Fills on standard fabric are pull-compensated, so no gap shows beside
+  them.
+- The floating Agent panel steps aside when you work on the canvas
+  (Auto-Hide), and a queued message can be sent at once.
+- A recently opened tab shows its stitches at once.
 
-[Full release notes](packaging/releases/0.1.8.md)
-· [Downloads](https://github.com/simpsoka/zigzag/releases/tag/v0.1.8)
+[Full release notes](packaging/releases/0.1.9.md)
+· [Downloads](https://github.com/simpsoka/zigzag/releases/tag/v0.1.9)
 
 ## Previous releases
+
+- [0.1.8](packaging/releases/0.1.8.md): sharing to zigzag.diy, opening
+  shared designs, an account that syncs machines and palettes, variable
+  fonts, queued messages to the agent.
 
 - [0.1.7](packaging/releases/0.1.7.md): chats kept with each design, images
   and slash commands in the prompt, design review, Blend, files opened in

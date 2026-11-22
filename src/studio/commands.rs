@@ -931,6 +931,9 @@ impl Studio {
     }
 
     pub fn set_tool(&mut self, t: Tool) {
+        if t != self.tool {
+            self.auto_hide_agent();
+        }
         if self.tool == Tool::Text && t != Tool::Text {
             self.finish_typing();
         }
