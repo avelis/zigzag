@@ -3683,7 +3683,11 @@ impl Studio {
         use crate::view_tools::Marker;
         let advanced = self.prefs.advanced;
         let pr = &mut self.doc.shapes[i].params;
-        let set = pr.start.is_some() || pr.end.is_some() || pr.trim.is_some() || pr.stop.is_some();
+        let set = pr.start.is_some()
+            || pr.end.is_some()
+            || pr.trim.is_some()
+            || pr.trim_before.is_some()
+            || pr.stop.is_some();
         if !advanced && !set {
             return 1;
         }
@@ -3733,9 +3737,16 @@ impl Studio {
                     pick = Some(None);
                 }
                 ui.add_space(theme::space::S);
+                let mut before = pr.trim_before == Some(true);
+                if ui.checkbox(&mut before, "Trim Before")
+                    .on_hover_text("Cut before this object if a thread is running; turn off to let the planner decide")
+                    .changed()
+                {
+                    pr.trim_before = before.then_some(true);
+                }
                 let mut trim = pr.trim == Some(true);
                 if ui
-                    .checkbox(&mut trim, "Trim")
+                    .checkbox(&mut trim, "Trim After")
                     .on_hover_text("Cut the thread after this object, even if the next one is close")
                     .changed()
                 {
@@ -4920,7 +4931,8 @@ mod tests {
             "Corners",
             "Short stitches",
             "Auto split",
-            "Trim",
+            "Trim Before",
+            "Trim After",
             "Remove overlaps",
             "Connect gaps",
         ];
