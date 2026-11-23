@@ -6310,11 +6310,16 @@ mod tests {
     #[test]
     fn the_guide_and_help_open_with_a_real_click() {
         use crate::dock::PanelId;
-        use egui_kittest::kittest::Queryable;
+        use egui_kittest::kittest::{NodeT, Queryable};
         // A pointer press and release over each, as a mouse does (not an
         // accessibility click, which goes straight to the widget).
         let opened = |h: &mut egui_kittest::Harness<'_, crate::app::Studio>, label: &str| -> bool {
-            let at = h.get_by_label(label).rect().center();
+            // The Window menu also has a Help button; choose this panel's link.
+            let at = h.query_all_by_label(label)
+                .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Link)
+                .expect("guide link")
+                .rect()
+                .center();
             h.hover_at(at);
             h.step();
             h.drag_at(at);
