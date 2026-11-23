@@ -306,8 +306,7 @@ impl<'a> Inherit<'a> {
 /// Only the `stroke.`-prefixed tokens of an id.
 fn stroke_only(id: &str) -> Params {
     let decoded = crate::params::decode_illustrator_id(id);
-    let toks: Vec<&str> = decoded
-        .split([' ', '_', ',', ';'])
+    let toks: Vec<&str> = crate::params::param_tokens(&decoded)
         .filter(|t| t.to_ascii_lowercase().starts_with("stroke."))
         .collect();
     Params::parse_part(&toks.join(" "), true)
@@ -661,8 +660,7 @@ pub fn name_words(id: &str) -> Vec<String> {
     if decoded.starts_with("tl-") {
         return Vec::new();
     }
-    decoded
-        .split([' ', '_', ',', ';'])
+    crate::params::param_tokens(&decoded)
         // `#N` tokens are uniqueness suffixes added on save.
         .filter(|t| !t.is_empty() && !crate::params::is_param_token(t) && !t.starts_with('#'))
         .map(str::to_string)

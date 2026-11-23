@@ -474,8 +474,7 @@ impl Document {
                 let decoded = crate::params::decode_illustrator_id(&base);
                 let mut parts = svg::name_words(&f.label);
                 parts.extend(
-                    decoded
-                        .split('_')
+                    crate::params::param_tokens(&decoded)
                         .filter(|t| crate::params::is_param_token(t))
                         .map(str::to_string),
                 );
