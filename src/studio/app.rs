@@ -261,7 +261,6 @@ pub struct Studio {
     pub(crate) dock_ui: crate::dock::DockUi,
     /// The macOS menu bar (None elsewhere, and in tests).
     pub(crate) native_menu: Option<crate::native_menu::NativeMenu>,
-    pub(crate) show_jumps: bool,
     /// The gaps Connect sews across are lit up on the canvas until then
     /// (while its bar is being dragged, and a moment after).
     pub(crate) bridges_peek: Option<Instant>,
@@ -730,7 +729,6 @@ impl Studio {
             dock_saved: Default::default(),
             dock_ui: Default::default(),
             native_menu: None,
-            show_jumps: true,
             bridges_peek: None,
             hoop_custom: false,
             renaming: None,
@@ -2790,7 +2788,7 @@ impl Studio {
             let mods = crate::layout::DragMods {
                 shift,
                 alt,
-                snap: self.view_tools.smart_guides,
+                snap: self.prefs.smart_guides,
                 tol,
             };
             self.direct_canvas(&ctx, &resp, rect, tol, mods);
@@ -2799,7 +2797,7 @@ impl Studio {
             let mods = crate::layout::DragMods {
                 shift,
                 alt,
-                snap: self.view_tools.smart_guides,
+                snap: self.prefs.smart_guides,
                 tol,
             };
             self.anchor_canvas(&ctx, &resp, rect, tol, mods);
@@ -2896,7 +2894,7 @@ impl Studio {
                 let mods = crate::layout::DragMods {
                     shift,
                     alt,
-                    snap: self.view_tools.smart_guides,
+                    snap: self.prefs.smart_guides,
                     tol,
                 };
                 self.update_drag(self.view.to_design(rect, pos), mods);
@@ -3052,7 +3050,7 @@ impl Studio {
             crate::view_tools::draw_grid(&painter, rect, &self.view);
         }
         let opts = DrawOptions {
-            show_jumps: self.show_jumps,
+            show_jumps: self.prefs.show_jumps,
             limit: self.player.unwrap_or(usize::MAX),
             thread_mm: 0.4,
             view: self.view_tools.stitch_view,

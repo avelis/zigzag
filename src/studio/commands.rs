@@ -688,7 +688,7 @@ impl Studio {
     pub fn action_checked(&self, a: Action) -> Option<bool> {
         Some(match a {
             Action::ToggleGrid => self.view_tools.grid,
-            Action::ToggleSmartGuides => self.view_tools.smart_guides,
+            Action::ToggleSmartGuides => self.prefs.smart_guides,
             Action::Units(u) => self.dock.units == u,
             Action::ChangeCase(c) => {
                 let i = self.sel_index()?;
@@ -704,7 +704,7 @@ impl Studio {
                 self.view_tools.stitch_view == crate::canvas::StitchView::Lines
             }
             Action::TogglePoints => self.view_tools.points,
-            Action::ToggleJumps => self.show_jumps,
+            Action::ToggleJumps => self.prefs.show_jumps,
             Action::ToggleDensity => self.view_tools.density,
             Action::ToggleOrder => self.view_tools.order_labels,
             Action::Panel(p) => self.dock.visible(p),
@@ -824,7 +824,8 @@ impl Studio {
             Action::ToggleGrid => self.view_tools.grid = !self.view_tools.grid,
             Action::Units(u) => self.set_units(u),
             Action::ToggleSmartGuides => {
-                self.view_tools.smart_guides = !self.view_tools.smart_guides
+                self.prefs.smart_guides = !self.prefs.smart_guides;
+                self.prefs.save();
             }
             Action::TransformAgain => self.transform_again(),
             Action::RotateDialog => self.open_rotate_dialog(None),
@@ -876,7 +877,10 @@ impl Studio {
                 };
             }
             Action::TogglePoints => self.view_tools.points = !self.view_tools.points,
-            Action::ToggleJumps => self.show_jumps = !self.show_jumps,
+            Action::ToggleJumps => {
+                self.prefs.show_jumps = !self.prefs.show_jumps;
+                self.prefs.save();
+            }
             Action::Settings => self.open_settings(self.settings_ui.section),
             Action::ReportIssue => crate::sew::open_url(&issue_url()),
             Action::GitHub => crate::sew::open_url(crate::about::GITHUB_URL),

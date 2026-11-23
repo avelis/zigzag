@@ -92,7 +92,12 @@ impl Studio {
                         ui.set_min_width(200.0);
                         ui.checkbox(&mut self.view_tools.grid, "Grid");
                         ui.checkbox(&mut self.view_tools.points, "Needle points");
-                        ui.checkbox(&mut self.show_jumps, "Jump stitches");
+                        if ui
+                            .checkbox(&mut self.prefs.show_jumps, "Jump stitches")
+                            .changed()
+                        {
+                            self.prefs.save();
+                        }
                         ui.horizontal(|ui| {
                             ui.color_edit_button_srgb(&mut self.doc.settings.cloth);
                             ui.label("Fabric color");

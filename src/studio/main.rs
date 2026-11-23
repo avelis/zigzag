@@ -4,10 +4,12 @@
 mod about;
 mod account;
 mod agent;
+mod agent_setup;
 mod agent_log;
 mod app;
 mod app_icon;
 mod attach;
+mod brands;
 mod backing;
 mod brush;
 mod build_tools;

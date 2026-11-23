@@ -88,6 +88,8 @@ pub enum Icon {
     PenDelete,
     /// A check mark: all clear.
     Check,
+    /// An open book: a guide, getting started.
+    Book,
     /// A clock face: earlier chats.
     History,
     /// A rounded corner.
@@ -455,6 +457,11 @@ pub fn paint(p: &Painter, r: Rect, icon: Icon, c: Color32) {
             if icon == Icon::PenAdd {
                 line(&[(0.2, 0.06), (0.2, 0.38)]);
             }
+        }
+        Icon::Book => {
+            // Two pages, open, meeting at the spine.
+            closed(&[(0.08, 0.24), (0.47, 0.32), (0.47, 0.86), (0.08, 0.78)], None);
+            closed(&[(0.53, 0.32), (0.92, 0.24), (0.92, 0.78), (0.53, 0.86)], None);
         }
         Icon::Sparkle => {
             // A four-point star (two thin diamonds) and a small one beside it.

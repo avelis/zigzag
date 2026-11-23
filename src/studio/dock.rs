@@ -767,7 +767,7 @@ impl Studio {
     /// ("Claude Code", "Codex").
     pub fn panel_name(&self, p: PanelId) -> &'static str {
         if p == PanelId::Agent {
-            self.agent.kind.name()
+            if self.agent.setup_page() { "Setup" } else { self.agent.kind.name() }
         } else {
             p.title()
         }
@@ -902,7 +902,7 @@ impl Studio {
                 let n = painter.text(
                     Pos2::new(a.right() + 4.0, rect.center().y),
                     egui::Align2::LEFT_CENTER,
-                    self.agent.kind.name(),
+                    self.panel_name(PanelId::Agent),
                     font,
                     p.text,
                 );
@@ -1043,9 +1043,21 @@ impl Studio {
                     // (A menu's own buttons sit tight to the left: room.)
                     ui.spacing_mut().button_padding = Vec2::new(12.0, 4.0);
                     use crate::agent::AgentKind;
+                    // Setup: installing and signing in, for any of them.
+                    let setup = self.agent.setup_page();
+                    if ui.add(egui::Button::new("Setup").selected(setup)).clicked() {
+                        // (Leaving a sign-in for Setup stops it: Setup can
+                        // start another.)
+                        if matches!(self.agent.setup.step, crate::agent_setup::Step::SigningIn(_)) {
+                            self.agent.setup.cancel();
+                        }
+                        self.agent.on_setup = true;
+                        ui.close();
+                    }
+                    ui.separator();
                     for k in AgentKind::ALL {
                         if ui
-                            .add(egui::Button::new(k.name()).selected(self.agent.kind == k))
+                            .add(egui::Button::new(k.name()).selected(!setup && self.agent.kind == k))
                             .clicked()
                         {
                             self.agent.set_kind(k);
@@ -5756,7 +5768,7 @@ mod tests {
                 crate::mcp::start(0, crate::tools::tool_specs(), String::new(), || {}).unwrap(),
             );
             s.agent.kind = AgentKind::Claude;
-            s.agent.found = [Some(Some(fake.clone())), Some(Some(fake.clone()))];
+            s.agent.found = [Some(Some(fake.clone())), Some(Some(fake.clone())), Some(Some(fake.clone()))];
             s.agent.prompt = "half a thought".into();
             s.set_selection(&[]);
             // A note pinned on the canvas, not yet sent.

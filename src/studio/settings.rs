@@ -94,6 +94,12 @@ pub struct Prefs {
     /// General: most people keep what they're given, and Basic is for
     /// someone who asks for less.
     pub advanced: bool,
+    /// Draw the jump stitches between parts of a design (View › Jump
+    /// Stitches): for every document, and kept from one launch to the next.
+    pub show_jumps: bool,
+    /// Snap to other objects and the hoop while dragging (View › Smart
+    /// Guides, ⌘U): kept the same way.
+    pub smart_guides: bool,
     path: Option<PathBuf>,
 }
 
@@ -114,6 +120,8 @@ impl Default for Prefs {
             thread_chart: Default::default(),
             share_defaults: None,
             advanced: true,
+            show_jumps: true,
+            smart_guides: true,
             path: None,
         }
     }
@@ -138,6 +146,12 @@ impl Prefs {
         };
         if let Some(on) = v["advanced"].as_bool() {
             p.advanced = on;
+        }
+        if let Some(on) = v["show_jumps"].as_bool() {
+            p.show_jumps = on;
+        }
+        if let Some(on) = v["smart_guides"].as_bool() {
+            p.smart_guides = on;
         }
         if let Some(a) = v["appearance"]
             .as_str()
@@ -219,6 +233,8 @@ impl Prefs {
             "auto_update": self.auto_update,
             "last_font": self.last_font,
             "advanced": self.advanced,
+            "show_jumps": self.show_jumps,
+            "smart_guides": self.smart_guides,
         });
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -1161,6 +1177,10 @@ mod tests {
         p.agent_log = false;
         p.agent_prompts = false;
         p.auto_update = false;
+        assert!(p.show_jumps, "jump stitches drawn unless they're turned off");
+        p.show_jumps = false;
+        assert!(p.smart_guides, "smart guides on unless they're turned off");
+        p.smart_guides = false;
         p.set_fold("before-you-sew", false);
         p.set_fold("machine-details", true);
         assert!(!p.fold_open("before-you-sew", true) && p.fold_open("machine-details", false));

@@ -1,24 +1,26 @@
 # Changelog
 
-## 0.1.9 — 2026-11-21
+## 0.1.10 — 2026-11-22
 
-- The agent reviews a design as an embroiderer would before it finishes:
-  underlay, rows close enough to cover the fabric, fills that don't all
-  run one way, empty outlines, the patch border, lettering size, and
-  specks left by a trace.
-- Trim settings you chose (Sew over fill, Connect, Blend) are left as you
-  set them, and Issues no longer flags the thread they sew in sight.
-- Fills on standard fabric are pull-compensated, so no gap shows beside
-  them.
-- The floating Agent panel steps aside when you work on the canvas
-  (Auto-Hide), and a queued message can be sent at once.
-- A recently opened tab shows its stitches at once.
+- The Agent panel has a Setup page: install an AI assistant and sign in
+  to it from the panel, with no terminal.
+- Google's Antigravity is a third agent, beside Codex and Claude Code.
+- A prompt sent while the agent server is off says why.
+- Jump Stitches and Smart Guides (View) are remembered between launches,
+  for every document.
+- The engine behind the zigzag.diy file checker is in ZigZag's library:
+  it reads a machine file's trims, notes what's wrong with the file and
+  fixes what its stitches alone allow.
 
-[Full release notes](packaging/releases/0.1.9.md)
-· [Downloads](https://github.com/simpsoka/zigzag/releases/tag/v0.1.9)
+[Full release notes](packaging/releases/0.1.10.md)
+· [Downloads](https://github.com/simpsoka/zigzag/releases/tag/v0.1.10)
 
 ## Previous releases
 
+- [0.1.9](packaging/releases/0.1.9.md): the agent reviews a design as an
+  embroiderer would, chosen trim settings are kept, pull-compensated
+  fills, Auto-Hide for the Agent panel, tabs that show their stitches at
+  once.
 - [0.1.8](packaging/releases/0.1.8.md): sharing to zigzag.diy, opening
   shared designs, an account that syncs machines and palettes, variable
   fonts, queued messages to the agent.

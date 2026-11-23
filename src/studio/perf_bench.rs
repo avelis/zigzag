@@ -552,7 +552,7 @@ fn making_and_aligning() {
         let n = h.state().doc.shapes.len();
         let i = n - 3;
         for guides in [true, false] {
-            h.state_mut().view_tools.smart_guides = guides;
+            h.state_mut().prefs.smart_guides = guides;
             let at = h.state().view.to_screen(
                 rect,
                 crate::app::shape_bounds(&h.state().doc.shapes[i]).center(),
@@ -598,7 +598,7 @@ fn making_and_aligning() {
             settle(&mut h);
         }
         // An object of the design itself, the same way (guides on).
-        h.state_mut().view_tools.smart_guides = true;
+        h.state_mut().prefs.smart_guides = true;
         let at = h.state().view.to_screen(
             rect,
             crate::app::shape_bounds(&h.state().doc.shapes[0]).center(),
@@ -972,7 +972,7 @@ fn sending_a_prompt() {
     h.state_mut().dock.reveal(crate::dock::PanelId::Agent);
     h.state_mut().agent.config = None;
     h.state_mut().agent.kind = crate::agent::AgentKind::Codex;
-    h.state_mut().agent.found = [None, None];
+    h.state_mut().agent.found = [None, None, None];
     h.run_steps(5);
     for round in 0..4 {
         h.state_mut().agent.prompt = format!("make it greener {round}");

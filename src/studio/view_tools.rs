@@ -33,8 +33,6 @@ pub struct ViewTools {
     pub marker_pick: Option<Marker>,
     /// A marker being dragged along the selected object's outline.
     pub marker_drag: Option<Marker>,
-    /// Snap to other objects and the hoop while dragging (⌘U).
-    pub smart_guides: bool,
     pub points: bool,
     /// Settings › General › Draw stitches on the GPU (off: egui's painter
     /// draws them).
@@ -91,7 +89,6 @@ impl Default for ViewTools {
             order_labels: false,
             marker_pick: None,
             marker_drag: None,
-            smart_guides: true,
             points: false,
             gpu_stitches: true,
             measure: None,
@@ -722,7 +719,7 @@ mod tests {
     #[test]
     fn measure_reads_distance_angle_and_size_in_the_unit() {
         let mut h = studio(None);
-        h.state_mut().view_tools.smart_guides = false;
+        h.state_mut().prefs.smart_guides = false;
         h.key_press(Key::I);
         h.run_steps(1);
         assert_eq!(h.state().tool, Tool::Measure);
@@ -753,7 +750,7 @@ mod tests {
     #[test]
     fn measure_snaps_to_the_grid_and_shift_keeps_it_level() {
         let mut h = studio(None);
-        h.state_mut().view_tools.smart_guides = false;
+        h.state_mut().prefs.smart_guides = false;
         h.state_mut().view_tools.grid = true;
         h.state_mut()
             .run_action(crate::commands::Action::Units(crate::units::Unit::In));
