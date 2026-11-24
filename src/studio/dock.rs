@@ -3742,7 +3742,7 @@ impl Studio {
                     .on_hover_text("Cut before this object if a thread is running; turn off to let the planner decide")
                     .changed()
                 {
-                    pr.trim_before = before.then_some(true);
+                    pr.trim_before = Some(before);
                 }
                 let mut trim = pr.trim == Some(true);
                 if ui
