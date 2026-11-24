@@ -3188,7 +3188,7 @@ impl Studio {
             crate::view_tools::draw_grid(&painter, rect, &self.view);
         }
         let opts = DrawOptions {
-            show_jumps: self.prefs.show_jumps,
+            show_jumps: self.prefs.show_jumps && self.drag.is_none() && !self.plan_cut,
             limit: self.player.unwrap_or(usize::MAX),
             thread_mm: 0.4,
             view: self.view_tools.stitch_view,
@@ -3238,9 +3238,12 @@ impl Studio {
             self.paint_stitches(&painter, rect, &self.design, &opts, 0, self.replans)
         };
         crate::profile::mark("c:stitches");
-        if sewing.is_none() {
+        if sewing.is_none() && self.plan_is_current() && self.drag.is_none() {
             self.draw_bridges(&painter, rect);
             self.route_handles(ui, &painter, rect);
+        } else {
+            self.route_drag = None;
+            self.route_active = None;
         }
         self.draw_isolation(&painter, rect);
         if self.view_tools.density {
