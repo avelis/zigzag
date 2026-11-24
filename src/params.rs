@@ -886,7 +886,7 @@ mod tests {
                 .trim_before,
             Some(false)
         );
-        assert_eq!(crate::svg::name_words("name_trim_before=0"), ["name"]);
+        assert_eq!(crate::svg::name_words("name_trimbefore=0"), ["name"]);
     }
 
     #[test]
