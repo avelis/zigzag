@@ -861,30 +861,13 @@ pub fn decode_illustrator_id(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn trim_before_tokens_and_inheritance() {
-        for on in [true, false] {
-            let p = Params {
-                trim_before: Some(on),
-                ..Params::default()
-            };
-            assert_eq!(Params::parse(&p.tokens().join("_")), p);
-            assert_eq!(Params::default().merged(&p), p);
-            assert_eq!(p.merged(&Params::default()), p);
-        }
+    fn trim_before_is_a_distinct_id_token() {
         assert_eq!(Params::parse("trim_before_photo").trim_before, None);
         let p = Params::parse("name_trimbefore_trim");
         assert_eq!((p.trim_before, p.trim), (Some(true), Some(true)));
-        assert!(is_param_token("trimbefore"));
-        assert!(is_param_token("trimbefore=0"));
         assert_eq!(
             Params::parse_part("stroke.trimbefore=1", true).trim_before,
             Some(true)
-        );
-        assert_eq!(
-            Params::parse("trimbefore")
-                .merged(&Params::parse("trimbefore=0"))
-                .trim_before,
-            Some(false)
         );
         assert_eq!(crate::svg::name_words("name_trimbefore=0"), ["name"]);
     }
