@@ -2609,13 +2609,11 @@ mod tests {
     #[test]
     fn a_drag_hides_the_cross_object_route_until_replanning() {
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="30mm" viewBox="0 0 100 30">
-            <path id="a_run" d="M0 10 L10 10" stroke="#aa0000" fill="none"/>
-            <path id="b_run" d="M40 10 L50 10" stroke="#aa0000" fill="none"/>
+            <rect id="a_fill" x="0" y="10" width="10" height="10" fill="#aa0000"/>
+            <rect id="b_fill_via=direct" x="40" y="10" width="10" height="10" fill="#aa0000"/>
         </svg>"##;
         let mut h = studio();
-        let mut doc = Document::from_svg(svg, "drag connection", None).unwrap();
-        doc.settings.short_travel = false;
-        doc.shapes[1].params.via = Some(Vec::new());
+        let doc = Document::from_svg(svg, "drag connection", None).unwrap();
         h.state_mut().set_document(doc);
         h.run_steps(5);
         let s = h.state_mut();
