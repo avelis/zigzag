@@ -3471,6 +3471,7 @@ pub(crate) fn give_settings(shape: &mut Shape, src: &Params) {
         start: own.start,
         end: own.end,
         trim: own.trim,
+        trim_before: own.trim_before,
         stop: own.stop,
         lock: own.lock,
         hide: own.hide,

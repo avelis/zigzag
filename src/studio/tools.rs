@@ -415,6 +415,7 @@ pub fn tool_specs() -> Value {
                     "color": { "type": ["string", "null"], "description": "Thread color #rrggbb, or null for the SVG's color." },
                     "start": { "type": ["number", "null"], "description": "Where sewing starts: 0–1 along the object's outline (fills: the outer ring from its first point; lines: from their start). Null: the planner chooses." },
                     "end": { "type": ["number", "null"], "description": "Where sewing ends, 0–1 along the outline (the thread goes on from there to the next object)." },
+                    "trim_before": { "type": ["boolean", "null"], "description": "Cut before this object if a thread is running, overriding route_mm. False allows automatic planning, overriding an inherited request if needed; null clears the explicit setting." },
                     "trim": { "type": ["boolean", "null"], "description": "Cut the thread after this object even if the next one is close." },
                     "route_mm": { "type": ["array", "null"], "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "maxItems": 40, "description": "Route the thread to this object by hand, from the object sewn before it in the same thread: the points [[x, y], …] (mm from the hoop center) it's sewn through with running stitches, instead of being cut (or going the planner's way). Lay it where it won't be seen: along the edge of something in a like color, under what's sewn later, down a seam. [] sews straight there. Null: the planner decides again. get_cuts says where the thread is cut and where each cut's ends are; set start (and the object before's end) to choose where the way begins and ends. A trim on the object before still cuts." },
                     "stop": { "type": ["boolean", "null"], "description": "Pause the machine after this object (to lay foam, or trim appliqué fabric)." },
@@ -1406,6 +1407,9 @@ impl Studio {
                 if let Some(t) = v {
                     settings.insert(k.into(), json!(t));
                 }
+            }
+            if let Some(on) = p.trim_before {
+                settings.insert("trim_before".into(), json!(on));
             }
             for (k, v) in [("trim", p.trim), ("stop", p.stop)] {
                 if v == Some(true) {
@@ -3639,6 +3643,9 @@ impl Studio {
         }
         if let Some(v) = num("end")? {
             p.end = v.map(along);
+        }
+        if let Some(v) = flag("trim_before")? {
+            p.trim_before = v.and_then(|on| shape.trim_before_setting(on));
         }
         if let Some(v) = flag("trim")? {
             p.trim = v.filter(|&x| x);
@@ -6233,6 +6240,43 @@ mod tests {
                 .iter()
                 .all(|o| o["prompt"] == 0),
             "{d}"
+        );
+    }
+
+    #[test]
+    fn trim_before_schema_set_get_and_reset() {
+        let specs = tool_specs();
+        let spec = specs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["name"] == "set_object")
+            .unwrap();
+        assert_eq!(
+            spec["inputSchema"]["properties"]["trim_before"]["type"],
+            json!(["boolean", "null"])
+        );
+        let mut s = Studio::with_file(None, None);
+        ok(s.run_tool("add_svg", &json!({"svg": BADGE, "replace": true})));
+        for on in [json!(true), json!(false), Value::Null] {
+            let expected = if on == json!(false) { Value::Null } else { on.clone() };
+            let r = ok(s.run_tool("set_object", &json!({"object": "bar", "trim_before": on})));
+            assert_eq!(r["settings"]["trim_before"], expected);
+            let r = ok(s.run_tool("get_design", &json!({})));
+            let object = r["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|o| o["name"] == "bar")
+                .unwrap();
+            assert_eq!(object["settings"]["trim_before"], expected);
+        }
+        assert!(
+            s.run_tool(
+                "set_object",
+                &json!({"object": "bar", "trim_before": "yes"})
+            )
+            .is_error
         );
     }
 

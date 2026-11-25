@@ -4094,13 +4094,18 @@ impl Studio {
         use crate::view_tools::Marker;
         let advanced = self.prefs.advanced;
         let pr = &mut self.doc.shapes[i].params;
-        let set = pr.start.is_some() || pr.end.is_some() || pr.trim.is_some() || pr.stop.is_some();
+        let set = pr.start.is_some()
+            || pr.end.is_some()
+            || pr.trim.is_some()
+            || pr.trim_before.is_some()
+            || pr.stop.is_some();
         if !advanced && !set {
             return 1;
         }
         theme::section_break(ui);
         let p = pal_ui(ui);
         let picking = self.view_tools.marker_pick;
+        let mut trim_before = None;
         let mut pick: Option<Option<Marker>> = None;
         let mut clear: Option<Marker> = None;
         form_for(ui, "sewing-form", advanced, |fm| {
@@ -4144,9 +4149,16 @@ impl Studio {
                     pick = Some(None);
                 }
                 ui.add_space(theme::space::S);
+                let mut before = pr.trim_before == Some(true);
+                if ui.checkbox(&mut before, "Trim Before")
+                    .on_hover_text("Cut before this object if a thread is running; turn off to let the planner decide")
+                    .changed()
+                {
+                    trim_before = Some(before);
+                }
                 let mut trim = pr.trim == Some(true);
                 if ui
-                    .checkbox(&mut trim, "Trim")
+                    .checkbox(&mut trim, "Trim After")
                     .on_hover_text("Cut the thread after this object, even if the next one is close")
                     .changed()
                 {
@@ -4167,6 +4179,10 @@ impl Studio {
                 Marker::Start => pr.start = None,
                 Marker::End => pr.end = None,
             }
+        }
+        if let Some(on) = trim_before {
+            let shape = &mut self.doc.shapes[i];
+            shape.params.trim_before = shape.trim_before_setting(on);
         }
         if let Some(m) = pick {
             self.view_tools.marker_pick = m;
@@ -5575,7 +5591,8 @@ mod tests {
             "Corners",
             "Short stitches",
             "Auto split",
-            "Trim",
+            "Trim Before",
+            "Trim After",
             "Remove overlaps",
             "Connect gaps",
         ];
