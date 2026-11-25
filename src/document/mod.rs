@@ -1726,6 +1726,26 @@ mod tests {
     }
 
     #[test]
+    fn routes_stay_with_their_own_svg_part_after_saving() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="50mm" viewBox="0 0 100 50">
+            <g id="group_via=direct">
+                <path id="plain" d="M0 0 L10 0" stroke="#aa0000" fill="none"/>
+                <path id="line_via=direct" d="M20 0 L30 0" stroke="#aa0000" fill="none"/>
+                <rect id="both_via=10:20_stroke.via=30:40" x="40" y="5" width="10" height="10" fill="#aa0000" stroke="#aa0000"/>
+            </g>
+        </svg>"##;
+        let doc = Document::from_svg(svg, "routes", None).unwrap();
+        let reopened = Document::from_svg(&doc.to_svg().unwrap(), "routes", None).unwrap();
+        for d in [&doc, &reopened] {
+            assert_eq!(d.shapes.len(), 4);
+            assert_eq!(d.shapes[0].params.via, None);
+            assert_eq!(d.shapes[1].params.via, Some(Vec::new()));
+            assert_eq!(d.shapes[2].params.via, Some(vec![(10.0, 20.0)]));
+            assert_eq!(d.shapes[3].params.via, Some(vec![(30.0, 40.0)]));
+        }
+    }
+
+    #[test]
     fn settings_round_trip_through_ids() {
         let mut d = Document::from_svg(ILLUSTRATOR, "t", None).unwrap();
         let sun = d.shapes.iter().position(|s| s.id == "sun").unwrap();

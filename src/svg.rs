@@ -449,7 +449,14 @@ fn import_path(path: &usvg::Path, inherited: &Inherit, out: &mut Vec<Shape>) {
         } else {
             ctx.base.clone()
         };
-        let params = base.merged(&ctx.stroke);
+        let params = Params {
+            // A route belongs to the element's own sewn part, not its group.
+            // For a stroke-only element its unprefixed route is the stroke's.
+            via: ctx.stroke.via.clone().or_else(|| {
+                if filled { None } else { ctx.base.via.clone() }
+            }),
+            ..base.merged(&ctx.stroke)
+        };
         let width = params
             .width
             .map(|w| w * 10.0)
