@@ -303,7 +303,7 @@ pub struct Document {
     pub(crate) lettering_ids: HashSet<String>,
     /// The prompts agents made elements for (by element id; see [`PROMPT_ATTR`]).
     prompts: HashMap<String, String>,
-    /// Groups' names as they were given (`<g data-name>`, by group id):
+    /// Groups' names as they were given (`<g data-zigzag-name>`, by group id):
     /// an id keeps only the words that aren't stitch settings, so a placed
     /// "Fun Run 5k.pes" is id `Fun_5k` but still named "Fun Run 5k".
     group_names: HashMap<String, String>,
@@ -883,6 +883,22 @@ impl Document {
         Ok(added)
     }
 
+    /// The objects' names, as [`svg::display_names`] has them, except that
+    /// an object with no name of its own, called what its group is, has
+    /// the group's whole name (a placed file of one run: the file's).
+    pub fn object_names(&self) -> Vec<String> {
+        let mut names = svg::display_names(&self.shapes);
+        for (n, s) in names.iter_mut().zip(&self.shapes) {
+            if let Some(full) = self.group_names.get(&s.label) {
+                let base = svg::name_words(&s.label).join(" ");
+                if let Some(rest) = n.strip_prefix(base.as_str()) {
+                    *n = format!("{full}{rest}");
+                }
+            }
+        }
+        names
+    }
+
     /// The name a group was given (see `group_names`), if it has one beyond
     /// its id.
     pub fn group_name(&self, id: &str) -> Option<&str> {
@@ -1402,9 +1418,11 @@ fn highest_numbered_id(xml: &str) -> usize {
         .unwrap_or(0)
 }
 
-/// The attribute a group's name is kept in when its id can't hold all of it
-/// (Illustrator writes names there too).
-const GROUP_NAME_ATTR: &str = "data-name";
+/// The attribute a group's name is kept in when its id can't hold all of
+/// it. ZigZag's own: Illustrator writes `data-name`, with names that are
+/// the id's settings spelled out (`Face fill angle=45`), and those are left
+/// to the id.
+pub const GROUP_NAME_ATTR: &str = "data-zigzag-name";
 
 /// The id of a placed machine file's group: the file's name, in words that
 /// aren't stitch settings (a file called `rose satin.pes` mustn't turn its
@@ -2137,6 +2155,75 @@ mod tests {
         let copy = d.shapes[copies[0]].groups[0].clone();
         assert_ne!(copy, renamed);
         assert_eq!(d.group_name(&copy), Some("Fun Run 5k"));
+    }
+
+    #[test]
+    fn illustrators_data_name_is_left_to_the_id() {
+        // Illustrator writes the layer's name, settings and all, beside the
+        // id it makes of it: the name is still the id's words.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+          <g id="Face_fill_angle_x3D_45" data-name="Face fill angle=45">
+            <rect x="0" y="0" width="40" height="40" fill="#f80"/>
+            <rect x="50" y="0" width="40" height="40" fill="#08f"/>
+          </g>
+        </svg>"##;
+        let d = Document::from_svg(svg, "t", None).unwrap();
+        let g = d.shapes[0].groups[0].clone();
+        assert_eq!(d.group_name(&g), None);
+        assert_eq!(svg::name_words(&g), ["Face"]);
+        // And a placed file's name goes in ZigZag's own attribute.
+        let mut d = Document::empty();
+        d.place_stitch_file(&sample_pes(), "pes", "Red Cross Logo", Placement::default())
+            .unwrap();
+        let xml = d.to_svg().unwrap();
+        assert!(
+            xml.contains(r#"data-zigzag-name="Red Cross Logo""#),
+            "{xml}"
+        );
+        assert!(!xml.contains("data-name="), "{xml}");
+    }
+
+    #[test]
+    fn a_placed_file_of_one_run_is_one_object_called_what_the_file_is() {
+        use crate::design::{Block, Design, Run};
+        let one = crate::formats::dst::write_dst(&Design {
+            name: "line".into(),
+            blocks: vec![Block {
+                color: [10, 85, 163],
+                runs: vec![Run {
+                    pts: vec![P::new(-50.0, 0.0), P::new(0.0, 20.0), P::new(50.0, 0.0)],
+                    trim_before: true,
+                }],
+            }],
+            ..Design::default()
+        });
+        let mut d = Document::empty();
+        let new = d
+            .place_stitch_file(&one, "dst", "Red Cross Logo", Placement::default())
+            .unwrap();
+        assert_eq!(new.len(), 1);
+        assert_eq!(d.shapes[new[0]].params.kind, Some(Kind::Manual));
+        assert_eq!(d.object_names()[new[0]], "Red Cross Logo");
+        // Placed twice, the second is told apart.
+        let again = d
+            .place_stitch_file(&one, "dst", "Red Cross Logo", Placement::default())
+            .unwrap();
+        let names = d.object_names();
+        assert_ne!(names[new[0]], names[again[0]]);
+        assert!(names[again[0]].starts_with("Red Cross Logo"), "{names:?}");
+    }
+
+    #[test]
+    fn a_named_group_pasted_into_another_document_keeps_its_name() {
+        let mut from = Document::empty();
+        let new = from
+            .place_stitch_file(&sample_pes(), "pes", "Fun Run 5k", Placement::default())
+            .unwrap();
+        let copied = from.copy(&new).unwrap();
+        let mut to = Document::empty();
+        let pasted = to.paste(&copied, P::default()).unwrap();
+        let g = to.shapes[pasted[0]].groups[0].clone();
+        assert_eq!(to.group_name(&g), Some("Fun Run 5k"));
     }
 
     #[test]

@@ -631,6 +631,25 @@ fn to_svg_in_group(f: &StitchFile, group: Option<&str>) -> String {
     if let Some(id) = group {
         let _ = writeln!(s, r#"  <g id="{}">"#, attr_escape(id));
     }
+    // A placed file of one run is one object: it has no name of its own (so
+    // it's called what its group, the file, is), and no color group.
+    let runs: usize = f.blocks.iter().map(|b| b.runs.len()).sum();
+    if group.is_some() && runs == 1 {
+        for blk in &f.blocks {
+            for run in &blk.runs {
+                let _ = writeln!(
+                    s,
+                    r##"    <path id="manual" d="{}" fill="none" stroke="#{:02x}{:02x}{:02x}" stroke-width="0.4"/>"##,
+                    path_d(run, c),
+                    blk.color[0],
+                    blk.color[1],
+                    blk.color[2]
+                );
+            }
+        }
+        s.push_str("  </g>\n</svg>\n");
+        return s;
+    }
     for (bi, blk) in f.blocks.iter().enumerate() {
         let col = format!(
             "#{:02x}{:02x}{:02x}",
@@ -638,23 +657,12 @@ fn to_svg_in_group(f: &StitchFile, group: Option<&str>) -> String {
         );
         let _ = writeln!(s, r#"  <g id="color_{}">"#, bi + 1);
         for (ri, run) in blk.runs.iter().enumerate() {
-            let mut d = String::new();
-            for (k, p) in run.iter().enumerate() {
-                let q = *p - c;
-                let _ = write!(
-                    d,
-                    "{}{:.1},{:.1} ",
-                    if k == 0 { "M" } else { "L" },
-                    q.x / 10.0,
-                    q.y / 10.0
-                );
-            }
             let _ = writeln!(
                 s,
                 r#"    <path id="stitches_{}_{}_manual" d="{}" fill="none" stroke="{col}" stroke-width="0.4"/>"#,
                 bi + 1,
                 ri + 1,
-                d.trim_end()
+                path_d(run, c)
             );
         }
         s.push_str("  </g>\n");
@@ -664,6 +672,22 @@ fn to_svg_in_group(f: &StitchFile, group: Option<&str>) -> String {
     }
     s.push_str("</svg>\n");
     s
+}
+
+/// A run's needle points as a path, in mm from `c` (in 0.1 mm units).
+fn path_d(run: &[P], c: P) -> String {
+    let mut d = String::new();
+    for (k, p) in run.iter().enumerate() {
+        let q = *p - c;
+        let _ = write!(
+            d,
+            "{}{:.1},{:.1} ",
+            if k == 0 { "M" } else { "L" },
+            q.x / 10.0,
+            q.y / 10.0
+        );
+    }
+    d.trim_end().to_string()
 }
 
 fn attr_escape(v: &str) -> String {

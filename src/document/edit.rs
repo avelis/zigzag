@@ -106,6 +106,9 @@ pub struct Fragment {
     /// Groups it sits in that were copied whole, outermost first; pasting
     /// rebuilds them so a copied group stays a group.
     groups: Vec<String>,
+    /// Those groups' names (see `Document::group_name`), so they go with
+    /// them into whichever document they're pasted in.
+    group_names: HashMap<String, String>,
 }
 
 pub(super) fn fmt_matrix(m: Affine) -> String {
@@ -421,6 +424,18 @@ impl Document {
                     .find(|s| s.id == id)
                     .map(|s| s.groups.iter().filter(|g| whole(g)).cloned().collect())
                     .unwrap_or_default(),
+                group_names: self
+                    .shapes
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(|s| {
+                        s.groups
+                            .iter()
+                            .filter(|g| whole(g))
+                            .filter_map(|g| Some((g.clone(), self.group_names.get(g)?.clone())))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 id,
             });
         }
@@ -520,7 +535,12 @@ impl Document {
             ));
         }
         let mut body = String::new();
-        tree.emit(&pieces, &mut used, &self.group_names, &mut body);
+        // (The names came with the copies: from this document or another.)
+        let names: HashMap<String, String> = fragments
+            .iter()
+            .flat_map(|f| f.group_names.iter().map(|(g, n)| (g.clone(), n.clone())))
+            .collect();
+        tree.emit(&pieces, &mut used, &names, &mut body);
         let close = self
             .xml
             .rfind("</svg>")

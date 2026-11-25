@@ -383,7 +383,7 @@ fn write_output(doc: &Document, d: &Design, path: &Path, hoop: (f64, f64)) -> Re
                     hoop.1,
                 )),
                 background: [255, 255, 255],
-                names: zigzag::svg::display_names(&doc.shapes),
+                names: doc.object_names(),
                 spm: 400.0,
             };
             zigzag::formats::worksheet::html(d, &info)?.into_bytes()
@@ -399,7 +399,7 @@ fn write_output(doc: &Document, d: &Design, path: &Path, hoop: (f64, f64)) -> Re
 }
 
 fn print_checks(doc: &Document, d: &Design, hoop: (f64, f64)) {
-    let names = zigzag::svg::display_names(&doc.shapes);
+    let names = doc.object_names();
     for issue in checks::check(&doc.shapes, d, &doc.plan_options(), Some(hoop)) {
         let level = match issue.level {
             Level::Error => "error",

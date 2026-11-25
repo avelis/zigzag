@@ -3160,7 +3160,7 @@ impl Studio {
                 if let Some(at) = self.doc.shapes.iter().position(|s| s.uid == uid) {
                     self.set_selection(&[at]);
                 }
-                self.names = zigzag::svg::display_names(&self.doc.shapes);
+                self.names = self.doc.object_names();
                 self.status = format!("Renamed to {name}.");
             }
             Err(e) => self.status = format!("Couldn't rename it: {e}."),
@@ -5244,7 +5244,7 @@ mod tests {
             .with_size(Vec2::new(300.0, 400.0))
             .build_ui_state(
                 |ui, s: &mut Studio| {
-                    s.names = zigzag::svg::display_names(&s.doc.shapes);
+                    s.names = s.doc.object_names();
                     s.objects_body(ui)
                 },
                 s,

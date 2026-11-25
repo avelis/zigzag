@@ -898,7 +898,7 @@ impl Studio {
         // supersedes any still out.
         self.planner.took(self.plan_ms);
         self.planner.superseded();
-        self.names = svg::display_names(&self.doc.shapes);
+        self.names = self.doc.object_names();
         self.dirty = false;
     }
 

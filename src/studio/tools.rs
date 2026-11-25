@@ -2305,7 +2305,7 @@ impl Studio {
             self.replan();
         } else if self.batching {
             // Later steps name objects as they are now (names are cheap).
-            self.names = zigzag::svg::display_names(&self.doc.shapes);
+            self.names = self.doc.object_names();
         }
         let result = result.unwrap_or_else(ToolResult::error);
         match before {
@@ -3406,7 +3406,7 @@ impl Studio {
         if self.batching {
             self.dirty = true;
             // Names are cheap, and later steps refer to objects by them.
-            self.names = zigzag::svg::display_names(&self.doc.shapes);
+            self.names = self.doc.object_names();
         } else {
             self.replan();
         }
