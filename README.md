@@ -269,7 +269,7 @@ Laid out like Illustrator, styled like a Mac app:
 - **Pen** (P): draw filled shapes or lines with corners and curves, or place manual stitches one by one. Snaps to the grid when it's showing, else to smart guides.
 - **Shapes** (M, L, \\): rectangles (with rounded corners), ellipses, polygons, stars and lines.
 - **Measure**, **mm grid**, **needle points**, **First/Last**, **Group colors**.
-- **Open machine files** (PES, PEC, DST, EXP, JEF, VP3) to view, resize and re-export them, or **Place** them into a design that's already open; **images** open to trace.
+- **Open machine files** (PES, PEC, DST, EXP, JEF, VP3) to view, resize and re-export them, or **Place** them into a design that's already open: a placed file keeps the size it was digitized at and comes in as one group named after the file (the whole name, even words that are also stitch types, like "Red Cross Logo"); **images** open to trace.
 - **Settings per type:** fill angle (with a drag-to-set **angle tool**, `A`), spacing, length, pull, underlay. Satin options: column vs border, stitch (satin, S-stitch, zig-zag), threads across the column, width, underlay passes, short stitches. Contour and ripple: rings or spiral. Cross-stitch: cell size. Tartan: the stripes (color and width each, mirrored), angle, row spacing. Run options: single or triple.
 - **Lean** in the Stitch panel, for satins: how far the stitches lean from square across the column (a few degrees keeps them from sinking between a knit's rows; more shows a slant, like a leaf's veins).
 - **Zigzag: Even** in the Stitch panel, for satins: each step along the column is shared between the stitch over and the stitch back, so both slant the same and a narrow stem's edges are clean. Off, one stitch goes straight across and the next takes the whole step.
@@ -322,6 +322,7 @@ Tools:
 - `render_preview` (returns a PNG of the stitches), `check_design`, `get_svg`, `select`
 - `review_design` (the design as an embroiderer would look it over before sewing: underlay, spacing, fill directions, empty outlines, the border, lettering size, what it costs to sew and which settings would save trims), `get_cuts` (where the thread is cut, and why), `offer_choices` (a card of choices for the person, each made with one click)
 - `export` with `objects: true` also writes `FILE.objects.json`: which object each stitch, jump and trim in the machine file is for, so a checker can name the shape behind a fault
+- `place_file` (a machine file into the open design at its digitized size, as one group named after the file; or an SVG or image)
 - `open_file` (SVG, machine file or image, in a tab of its own), `list_documents`, `switch_document`, `new_document`, `undo`, `redo`, `save`, `export` (machine formats or `html` worksheet; without a format, the one the path ends in, or else the one the document's machine reads), `send_to_skitch`, `machine_status`
 - Any tool that changes the design takes `terse: true` for a short answer (ok, the names of objects added, and the design problems that are new) instead of the whole object; on `batch` it covers every step.
 - `trace_image` (PNG, JPEG, WebP, GIF, BMP or TIFF logo → shapes, colors snapped to a thread chart), `add_outline` (a satin or running-stitch outline on a filled shape, as an object of its own), `round_corners`, `simplify` (VectorCraft's 0–100 levels, or Auto), `clean_up`, `simplify_design` (fewer threads, small details and trims for the whole design; `dry_run` to see what it comes to)
@@ -348,6 +349,7 @@ zigzag convert logo.svg -o logo.dst --min-stitch 0.4 --lock triangle:0.5:3
 zigzag convert logo.svg -o logo.exp --set "pc=0.3 ul=center"   # stitch settings (here pull compensation and satin underlay) for every object that doesn't set its own
 zigzag machines                          # list machines
 zigzag convert logo.svg -o logo.exp --objects   # and logo.exp.objects.json: which object each stitch is for
+zigzag convert frame.pes --place name.dst@0,25 --place heart.vp3 -o combined.pes   # place other files in it: machine files at their size, centered or at X,Y mm
 zigzag skitch info | status              # needs --features ble
 zigzag skitch send logo.svg --trace
 ```

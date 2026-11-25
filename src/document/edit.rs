@@ -46,7 +46,15 @@ impl GroupTree {
         }
     }
 
-    fn emit(&self, pieces: &[String], used: &mut HashSet<String>, out: &mut String) {
+    /// Write the groups and what's in them; `names` are the copied groups'
+    /// names, which the new groups keep.
+    fn emit(
+        &self,
+        pieces: &[String],
+        used: &mut HashSet<String>,
+        names: &HashMap<String, String>,
+        out: &mut String,
+    ) {
         for it in &self.items {
             match it {
                 TreeItem::Fragment(k) => out.push_str(&pieces[*k]),
@@ -65,8 +73,16 @@ impl GroupTree {
                         id = format!("{base}_#{k}");
                     }
                     used.insert(id.clone());
-                    out.push_str(&format!("<g id=\"{}\">\n", xml_escape(&id)));
-                    g.emit(pieces, used, out);
+                    match names.get(&g.id) {
+                        Some(name) => out.push_str(&format!(
+                            "<g id=\"{}\" {}=\"{}\">\n",
+                            xml_escape(&id),
+                            super::GROUP_NAME_ATTR,
+                            xml_escape(name)
+                        )),
+                        None => out.push_str(&format!("<g id=\"{}\">\n", xml_escape(&id))),
+                    }
+                    g.emit(pieces, used, names, out);
                     out.push_str("</g>\n");
                 }
             }
@@ -504,7 +520,7 @@ impl Document {
             ));
         }
         let mut body = String::new();
-        tree.emit(&pieces, &mut used, &mut body);
+        tree.emit(&pieces, &mut used, &self.group_names, &mut body);
         let close = self
             .xml
             .rfind("</svg>")

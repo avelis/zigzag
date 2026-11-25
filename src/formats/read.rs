@@ -602,6 +602,16 @@ pub fn read_stitch_file(data: &[u8], ext: &str) -> Result<StitchFile> {
 /// An SVG (mm units, origin at the design's center) with one manual-stitch
 /// path per run, so the design can be moved, scaled and recolored as objects.
 pub fn to_svg(f: &StitchFile) -> String {
+    to_svg_in_group(f, None)
+}
+
+/// [`to_svg`], with the color blocks inside one group of this id: a file
+/// placed in another design comes in as one thing, under its own name.
+pub fn to_svg_grouped(f: &StitchFile, group: &str) -> String {
+    to_svg_in_group(f, Some(group))
+}
+
+fn to_svg_in_group(f: &StitchFile, group: Option<&str>) -> String {
     let mut b = crate::geom::Bounds::empty();
     for p in f.blocks.iter().flat_map(|b| b.runs.iter().flatten()) {
         b.add(*p);
@@ -618,6 +628,9 @@ pub fn to_svg(f: &StitchFile) -> String {
         (b.min.x - c.x) / 10.0,
         (b.min.y - c.y) / 10.0
     );
+    if let Some(id) = group {
+        let _ = writeln!(s, r#"  <g id="{}">"#, attr_escape(id));
+    }
     for (bi, blk) in f.blocks.iter().enumerate() {
         let col = format!(
             "#{:02x}{:02x}{:02x}",
@@ -646,8 +659,18 @@ pub fn to_svg(f: &StitchFile) -> String {
         }
         s.push_str("  </g>\n");
     }
+    if group.is_some() {
+        s.push_str("  </g>\n");
+    }
     s.push_str("</svg>\n");
     s
+}
+
+fn attr_escape(v: &str) -> String {
+    v.replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[cfg(test)]
