@@ -1,12 +1,19 @@
 //! ZigZag studio: visual stitch editor (egui, OpenGL via glow) with an
 //! MCP server so agents can work on the same canvas.
 
+// A window app on Windows, so opening ZigZag.exe doesn't also open a console
+// window. `attach_console` gives a launch from a terminal its output back.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod about;
+mod account;
 mod agent;
+mod agent_setup;
 mod agent_log;
 mod app;
 mod app_icon;
 mod attach;
+mod brands;
 mod backing;
 mod brush;
 mod build_tools;
@@ -32,6 +39,7 @@ mod lasso;
 mod layout;
 mod lettering;
 mod lights;
+mod link;
 mod machine;
 mod machines;
 mod mcp;
@@ -42,6 +50,7 @@ mod path_edit;
 mod path_tools;
 mod pen;
 mod perf_bench;
+mod plan_keep;
 mod planner;
 mod profile;
 mod review;
@@ -50,10 +59,13 @@ mod session;
 mod settings;
 mod sew;
 mod shapes;
+mod thumbs;
+mod share;
 mod simplify;
 mod slash;
 mod snap;
 mod swatches;
+mod sync;
 mod tabs;
 mod taskbar;
 mod theme;
@@ -66,12 +78,49 @@ mod update;
 mod view_tools;
 mod widgets;
 
-const USAGE: &str = "usage: zigzag-studio [design.svg ...] [--select N] [--new-window] [--mcp-port PORT | --no-mcp | --mcp-stdio]\n\n  --mcp-stdio   no window: serve the MCP tools over stdin/stdout (headless, for agents)
+/// Runs `cmd` without a console window of its own. ZigZag is a window app
+/// on Windows (above), so a console program it starts (curl, claude, codex)
+/// would otherwise open a console window for as long as it runs. Elsewhere
+/// it does nothing.
+pub(crate) fn no_console(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// Windows starts a window app without a console, so `--help`, crash
+/// messages and logs printed from a terminal would go nowhere. Use the
+/// console of the terminal that started ZigZag, if any (as Alacritty and
+/// WezTerm do). Output that is already piped somewhere (an agent's
+/// `--mcp-stdio`, a script reading `--help`) stays where it goes.
+#[cfg(windows)]
+fn attach_console() {
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn AttachConsole(pid: u32) -> i32;
+    }
+    // SAFETY: takes a constant and touches no memory of ours; fails
+    // harmlessly when there is no parent console.
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_console() {}
+
+const USAGE: &str = "usage: zigzag-studio [design.svg | zigzag://open?url=… ...] [--select N] [--new-window] [--mcp-port PORT | --no-mcp | --mcp-stdio]\n\n  --mcp-stdio   no window: serve the MCP tools over stdin/stdout (headless, for agents)
   --new-window  a window of its own, even with ZigZag running already (also ZIGZAG_NEW_WINDOW=1)
 
 With ZigZag running already, the files open as tabs in its window instead.";
 
 fn main() -> eframe::Result {
+    attach_console();
     // A failure that stops ZigZag leaves a log to report (see `crash`).
     crash::install();
     // (To see the crash log and the report offer work: this fails on
@@ -80,6 +129,8 @@ fn main() -> eframe::Result {
         panic!("a crash made on purpose, to test the crash log");
     }
     let mut paths = Vec::new();
+    // `zigzag://` links (Windows and Linux; macOS sends an Apple Event).
+    let mut links = Vec::new();
     let mut select = None;
     // The agent server's port: as the command line says, else the
     // environment, else Settings (which can also turn it off).
@@ -107,6 +158,7 @@ fn main() -> eframe::Result {
             }
             // Finder can pass a process serial number when launching the .app.
             Some(s) if s.starts_with("-psn_") => {}
+            Some(s) if link::is_link(s) => links.push(s.to_string()),
             _ => paths.push(std::path::PathBuf::from(a)),
         }
     }
@@ -131,6 +183,7 @@ fn main() -> eframe::Result {
                 .map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone()))
                 .collect(),
             select,
+            links: links.clone(),
         };
         match instance::claim_in_config(&request) {
             instance::Start::First(i) => inbox = Some(i),
@@ -161,6 +214,14 @@ fn main() -> eframe::Result {
         });
         return Ok(());
     }
+    // Links this launch was started with download now, and open when the
+    // window is up; on macOS, links arrive as Apple Events from here on.
+    link::register_scheme();
+    for l in &links {
+        link::open(l);
+    }
+    #[cfg(target_os = "macos")]
+    link::listen_for_apple_events();
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
         viewport: {

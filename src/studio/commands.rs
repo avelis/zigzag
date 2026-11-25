@@ -25,6 +25,8 @@ pub enum Action {
     Save,
     SaveAs,
     Export(&'static str),
+    /// File › Share…: a page for the design at zigzag.diy.
+    Share,
     SendToSkitch,
     Undo,
     Redo,
@@ -45,6 +47,10 @@ pub enum Action {
     BringForward,
     SendBackward,
     SendToBack,
+    /// Object › Group / Ungroup: a group made of the selection, or the
+    /// selection taken out of its group.
+    Group,
+    Ungroup,
     GroupColors,
     AddText,
     Tool(Tool),
@@ -239,6 +245,7 @@ pub fn menus() -> Vec<(&'static str, Vec<Entry>)> {
                 Item(Action::Save, "Save", cmd(Key::S)),
                 Item(Action::SaveAs, "Save As…", cmd_shift(Key::S)),
                 Sep,
+                Item(Action::Share, "Share…", None),
                 Sub("Export", export),
                 Item(Action::SendToSkitch, "Send to Skitch…", None),
             ]
@@ -324,6 +331,9 @@ pub fn menus() -> Vec<(&'static str, Vec<Entry>)> {
                         Item(Action::Pathfinder(PathOp::Exclude), "Exclude", None),
                     ],
                 ),
+                Sep,
+                Item(Action::Group, "Group", cmd(Key::G)),
+                Item(Action::Ungroup, "Ungroup", cmd_shift(Key::G)),
                 Sep,
                 Sub(
                     "Sewing Order",
@@ -647,6 +657,7 @@ impl Studio {
             | Action::CleanUp
             | Action::SimplifyDesign => !self.doc.shapes.is_empty(),
             Action::Export(_) | Action::PlayPause => has_design,
+            Action::Share => !self.doc.shapes.is_empty(),
             // (Only for a machine ZigZag sends to.)
             Action::SendToSkitch => has_design && self.sends_direct(),
             Action::FlipH
@@ -668,6 +679,9 @@ impl Studio {
             | Action::SendBackward
             | Action::SendToBack => has_sel,
             Action::Pathfinder(_) => self.subjects().len() >= 2,
+            // (A shape and its own outline are one thing: not a group.)
+            Action::Group => self.subjects().len() >= 2,
+            Action::Ungroup => has_sel && self.any_grouped(&self.sel_indices()),
             Action::RemoveOutline => self
                 .subjects()
                 .iter()
@@ -684,7 +698,7 @@ impl Studio {
     pub fn action_checked(&self, a: Action) -> Option<bool> {
         Some(match a {
             Action::ToggleGrid => self.view_tools.grid,
-            Action::ToggleSmartGuides => self.view_tools.smart_guides,
+            Action::ToggleSmartGuides => self.prefs.smart_guides,
             Action::Units(u) => self.dock.units == u,
             Action::ChangeCase(c) => {
                 let i = self.sel_index()?;
@@ -700,7 +714,7 @@ impl Studio {
                 self.view_tools.stitch_view == crate::canvas::StitchView::Lines
             }
             Action::TogglePoints => self.view_tools.points,
-            Action::ToggleJumps => self.show_jumps,
+            Action::ToggleJumps => self.prefs.show_jumps,
             Action::ToggleDensity => self.view_tools.density,
             Action::ToggleOrder => self.view_tools.order_labels,
             Action::Panel(p) => self.dock.visible(p),
@@ -759,7 +773,12 @@ impl Studio {
             Action::Place => {
                 let mut exts = vec!["svg"];
                 exts.extend(zigzag::trace::IMAGE_FORMATS);
-                let req = crate::file_dialog::Request::open().filter("Artwork", &exts);
+                let mut all = exts.clone();
+                all.extend(zigzag::formats::READABLE_FORMATS);
+                let req = crate::file_dialog::Request::open()
+                    .filter("Artwork and machine files", &all)
+                    .filter("Artwork", &exts)
+                    .filter("Machine files", &zigzag::formats::READABLE_FORMATS);
                 self.file_dialog(req, crate::file_dialog::Then::Place);
             }
             Action::Save => {
@@ -771,6 +790,7 @@ impl Studio {
             }
             Action::SaveAs => self.save_as_dialog(),
             Action::Export(ext) => self.export_dialog(ext),
+            Action::Share => self.open_share(),
             Action::SendToSkitch => self.send_action(),
             Action::Undo => self.pending_history = Some(History::Undo),
             Action::Redo => self.pending_history = Some(History::Redo),
@@ -806,6 +826,8 @@ impl Studio {
             Action::CenterInHoop => {
                 self.transform_selected(translation(zigzag::geom::P::default() - c), "Centered");
             }
+            Action::Group => self.group_selected(),
+            Action::Ungroup => self.ungroup_selected(),
             Action::BringToFront => self.move_selected_to(false),
             Action::SendToBack => self.move_selected_to(true),
             Action::BringForward => self.move_selected(1),
@@ -819,7 +841,8 @@ impl Studio {
             Action::ToggleGrid => self.view_tools.grid = !self.view_tools.grid,
             Action::Units(u) => self.set_units(u),
             Action::ToggleSmartGuides => {
-                self.view_tools.smart_guides = !self.view_tools.smart_guides
+                self.prefs.smart_guides = !self.prefs.smart_guides;
+                self.prefs.save();
             }
             Action::TransformAgain => self.transform_again(),
             Action::RotateDialog => self.open_rotate_dialog(None),
@@ -871,7 +894,10 @@ impl Studio {
                 };
             }
             Action::TogglePoints => self.view_tools.points = !self.view_tools.points,
-            Action::ToggleJumps => self.show_jumps = !self.show_jumps,
+            Action::ToggleJumps => {
+                self.prefs.show_jumps = !self.prefs.show_jumps;
+                self.prefs.save();
+            }
             Action::Settings => self.open_settings(self.settings_ui.section),
             Action::ReportIssue => crate::sew::open_url(&issue_url()),
             Action::GitHub => crate::sew::open_url(crate::about::GITHUB_URL),
@@ -926,6 +952,9 @@ impl Studio {
     }
 
     pub fn set_tool(&mut self, t: Tool) {
+        if t != self.tool {
+            self.auto_hide_agent();
+        }
         if self.tool == Tool::Text && t != Tool::Text {
             self.finish_typing();
         }
@@ -1090,36 +1119,52 @@ impl Studio {
 
     fn menu_entries(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, entries: &[Entry]) {
         ui.set_min_width(220.0);
+        // A column for check marks, only in a menu that has something to
+        // check, and the same width on every row of it (submenus too), so
+        // the labels line up. Not spaces: their width is the font's, and
+        // a submenu's title had none.
+        let checks = entries
+            .iter()
+            .any(|e| matches!(e, Item(a, _, _) if self.action_checked(*a).is_some()));
+        let row = |checked: bool, label: &'static str| -> egui::Atoms<'static> {
+            let mut atoms = egui::Atoms::default();
+            if checks {
+                atoms.push_right(egui::Atom::paint(
+                    egui::Vec2::splat(MENU_CHECK),
+                    move |ui, args| {
+                        if checked {
+                            crate::icons::paint(
+                                ui.painter(),
+                                args.rect,
+                                crate::icons::Icon::Check,
+                                args.fallback_text_color,
+                            );
+                        }
+                    },
+                ));
+            }
+            atoms.push_right(label);
+            atoms
+        };
         for e in entries {
             match e {
                 Sep => {
                     ui.separator();
                 }
                 Sub(title, v) => {
-                    ui.menu_button(*title, |ui| self.menu_entries(ui, ctx, v));
+                    ui.menu_button(row(false, title), |ui| {
+                        self.menu_entries(ui, ctx, v)
+                    });
                 }
                 Item(a, label, sc) => {
-                    let checked = self.action_checked(*a).unwrap_or(false);
                     // The check is drawn, not typed: the fallback UI fonts
                     // (Arial on Windows) have no ✓ and show a box instead.
-                    let mut b = egui::Button::new(format!("      {label}"));
+                    let checked = self.action_checked(*a).unwrap_or(false);
+                    let mut b = egui::Button::new(row(checked, label));
                     if let Some(sc) = sc {
                         b = b.shortcut_text(ctx.format_shortcut(&sc.egui()));
                     }
                     let resp = ui.add_enabled(self.action_enabled(*a), b);
-                    if checked {
-                        let x = resp.rect.left() + ui.spacing().button_padding.x + 6.0;
-                        let r = egui::Rect::from_center_size(
-                            egui::pos2(x, resp.rect.center().y),
-                            egui::Vec2::splat(12.0),
-                        );
-                        crate::icons::paint(
-                            ui.painter(),
-                            r,
-                            crate::icons::Icon::Check,
-                            ui.visuals().text_color(),
-                        );
-                    }
                     if resp.clicked() {
                         self.run_action(*a);
                         ui.close();
@@ -1141,9 +1186,46 @@ impl Studio {
     }
 }
 
+/// The width of the check-mark column in an in-window menu.
+const MENU_CHECK: f32 = 12.0;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Where `text` is drawn in the last frame, from its painted shapes.
+    fn text_left(h: &egui_kittest::Harness<'_, crate::app::Studio>, text: &str) -> Option<f32> {
+        fn find(shape: &egui::Shape, text: &str) -> Option<f32> {
+            match shape {
+                egui::Shape::Text(t) if t.galley.text() == text => Some(t.pos.x),
+                egui::Shape::Vec(v) => v.iter().find_map(|s| find(s, text)),
+                _ => None,
+            }
+        }
+        h.output().shapes.iter().find_map(|c| find(&c.shape, text))
+    }
+
+    #[test]
+    fn in_window_menu_labels_line_up_with_and_without_checks_and_submenus() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::Vec2::new(900.0, 700.0))
+            .build_ui_state(
+                |ui, s: &mut crate::app::Studio| s.menu_bar(ui),
+                crate::app::Studio::with_file(None, None),
+            );
+        h.get_by_label("View").click();
+        h.run_steps(4);
+        // A checked toggle, an unchecked one and a submenu: one column.
+        let grid = text_left(&h, "Grid").expect("Grid is drawn");
+        let guides = text_left(&h, "Smart Guides").expect("Smart Guides is drawn");
+        let units = text_left(&h, "Units").expect("Units is drawn");
+        assert!((grid - guides).abs() < 0.5, "Grid at {grid}, Smart Guides at {guides}");
+        assert!((grid - units).abs() < 0.5, "Grid at {grid}, the Units submenu at {units}");
+        // With room for the check mark before them.
+        let left = h.get_by_label("View").rect().left() as f32;
+        assert!(grid > left + MENU_CHECK, "no room for a check: {grid} vs {left}");
+    }
 
     #[test]
     fn help_reports_an_issue_on_github_saying_which_zigzag() {

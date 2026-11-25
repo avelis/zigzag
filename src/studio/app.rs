@@ -151,6 +151,13 @@ pub struct Studio {
     /// What `review_design` found other settings would come to, for the
     /// design as it stood (document, revision, trims): see `trim_what_ifs`.
     pub(crate) what_ifs: std::cell::RefCell<Option<((u32, u64, usize), Vec<serde_json::Value>)>>,
+    /// The trim settings (over_sewn, connect_mm, blend_mm) the agent turned
+    /// on itself, per document (its recovery number): review_design asks it
+    /// to undo those where their thread shows, and leaves the person's own
+    /// choices (from a card of choices, or the Document panel) alone.
+    pub(crate) agent_set: std::collections::HashMap<u32, std::collections::HashSet<&'static str>>,
+    /// A card of choices is being applied: what it sets is the person's.
+    pub(crate) person_choosing: bool,
     pub names: Vec<String>,
     pub(crate) dirty: bool,
     pub(crate) plan_ms: f64,
@@ -220,6 +227,9 @@ pub struct Studio {
     pub(crate) batching: bool,
     /// Planning on a worker thread, for big designs.
     pub(crate) planner: crate::planner::Planner,
+    /// An MCP call whose edit is made, its answer waiting for the worker's
+    /// plan (see `handle_mcp`).
+    pub(crate) mcp_waiting: Option<WaitingCall>,
     /// When the menu bar's states were last brought up to date (egui time).
     pub(crate) menu_synced: f64,
     /// The stitches, tessellated (see `canvas::draw_design_cached`).
@@ -251,7 +261,6 @@ pub struct Studio {
     pub(crate) dock_ui: crate::dock::DockUi,
     /// The macOS menu bar (None elsewhere, and in tests).
     pub(crate) native_menu: Option<crate::native_menu::NativeMenu>,
-    pub(crate) show_jumps: bool,
     /// The gaps Connect sews across are lit up on the canvas until then
     /// (while its bar is being dragged, and a moment after).
     pub(crate) bridges_peek: Option<Instant>,
@@ -318,6 +327,12 @@ pub struct Studio {
     /// Bring the window to the front again next frame (it may only just
     /// have been restored from the taskbar or Dock).
     pub(crate) focus_again: bool,
+    /// File › Share… (see `share.rs`).
+    pub(crate) share: crate::share::ShareUi,
+    /// Settings › Account: signed in to zigzag.diy (see `account.rs`).
+    pub(crate) account: crate::account::AccountUi,
+    /// Settings that follow you between computers (see `sync.rs`).
+    pub(crate) sync: crate::sync::Sync,
 }
 
 impl Studio {
@@ -343,6 +358,9 @@ impl Studio {
             i.on_arrival(move || ctx.request_repaint());
         }
         s.inbox = inbox;
+        // And so does a `zigzag://` link's download, when it's done.
+        let ctx = cc.egui_ctx.clone();
+        crate::link::on_news(move || ctx.request_repaint());
         // A job on the Skitch outlives the app: pick it up too.
         let resume = s.restore_sent() && s.session.resume_skitch;
         s.dock = crate::dock::DockState::load();
@@ -367,12 +385,53 @@ impl Studio {
                 Ok("settings") => s.open_settings(Section::Machines),
                 Ok("settings-general") => s.open_settings(Section::General),
                 Ok("settings-agent") => s.open_settings(Section::Agent),
+                Ok("settings-account") => s.open_settings(Section::Account),
+                // Changing the screen name.
+                Ok("settings-account-name") => {
+                    s.open_settings(Section::Account);
+                    s.account.editing = true;
+                }
+                // Signing in, a code on its way.
+                Ok("settings-account-code") => {
+                    s.open_settings(Section::Account);
+                    s.account.step = crate::account::Step::Code("you@example.com".into());
+                }
                 Ok("select") => s.select_index(Some(0)),
                 Ok("issues") => s.open_issues = true,
                 // (A selection box, part way through being dragged out.)
                 Ok("marquee") => s.marquee = Some((P::new(-220.0, -120.0), P::new(60.0, 90.0))),
                 // The windows about ZigZag itself.
                 Ok("about") => s.about = true,
+                // The floating Agent panel with its menu open.
+                Ok("agent-menu") => {
+                    use crate::dock::{PanelId, Place};
+                    s.dock.move_panel(PanelId::Agent, Place::Float, None);
+                    s.dock.reveal(PanelId::Agent);
+                    s.dock_ui.peek_menu = Some(PanelId::Agent);
+                }
+                // File › Share… on the design.
+                Ok("share") => {
+                    s.open_share();
+                    s.share.from_menu = false;
+                }
+                // File › Share…: the popover at the left.
+                Ok("share-menu") => s.open_share(),
+                // Its menus, open.
+                Ok(show @ ("share-who" | "share-license" | "share-downloads" | "share-length")) => {
+                    s.open_share();
+                    s.share.from_menu = false;
+                    s.share.peek = Some(match show {
+                        "share-who" => "who",
+                        "share-license" => "license",
+                        "share-length" => "length",
+                        _ => "downloads",
+                    });
+                }
+                Ok("share-export") => {
+                    s.open_share();
+                    s.share.from_menu = false;
+                    s.share.tab = crate::share::Tab::Export;
+                }
                 Ok("crash") => s.crash = Some(std::path::PathBuf::from("crash.txt")),
                 // Simplify Design, part way: half the threads, no small details.
                 Ok(
@@ -416,6 +475,34 @@ impl Studio {
                     }
                     .into();
                     s.agent.focus = true;
+                }
+                // Messages written while it works, waiting for its turn to end.
+                Ok("agent-queued") => {
+                    use crate::agent::Entry;
+                    s.dock.reveal(crate::dock::PanelId::Agent);
+                    s.agent.log = vec![
+                        Entry::You("make the sun satin".into()),
+                        Entry::Said("Changing the sun to satin and checking the trims.".into()),
+                    ];
+                    s.agent.queued = vec![
+                        "can you make the surrounding box a little less wide".into(),
+                        "and use a darker blue for the ring".into(),
+                        "then check it for problems before I sew, and if anything\nlooks off, tell me what you'd change".into(),
+                        "one more thing".into(),
+                    ];
+                    s.agent.start_fake_run();
+                }
+                // The panel put away: the Agent button's spinner while it
+                // works, or its dot for a reply not read yet.
+                Ok(away @ ("agent-away-working" | "agent-away-unread")) => {
+                    if s.dock.visible(crate::dock::PanelId::Agent) {
+                        s.dock.toggle(crate::dock::PanelId::Agent);
+                    }
+                    if away.ends_with("working") {
+                        s.agent.start_fake_run();
+                    } else {
+                        s.agent.unread = true;
+                    }
                 }
                 // One change on offer: a question and two buttons.
                 Ok("agent-choice") => {
@@ -586,6 +673,8 @@ impl Studio {
             route_drag: None,
             route_active: None,
             what_ifs: Default::default(),
+            agent_set: Default::default(),
+            person_choosing: false,
             names: Vec::new(),
             dirty: true,
             plan_ms: 0.0,
@@ -627,6 +716,7 @@ impl Studio {
             plan_cache: Default::default(),
             batching: false,
             planner: Default::default(),
+            mcp_waiting: None,
             menu_synced: f64::NEG_INFINITY,
             stitch_mesh: Default::default(),
             gpu: None,
@@ -639,7 +729,6 @@ impl Studio {
             dock_saved: Default::default(),
             dock_ui: Default::default(),
             native_menu: None,
-            show_jumps: true,
             bridges_peek: None,
             hoop_custom: false,
             renaming: None,
@@ -673,6 +762,9 @@ impl Studio {
             density: Default::default(),
             inbox: None,
             focus_again: false,
+            share: Default::default(),
+            account: Default::default(),
+            sync: Default::default(),
         };
         if let Some(p) = path {
             s.load(&p);
@@ -739,6 +831,7 @@ impl Studio {
         self.layout.multi.clear();
         // Which groups are open in Layers was the last document's.
         self.layout.expanded.clear();
+        self.layout.open_runs.clear();
         self.open_lone_groups();
         self.drag = None;
         self.backing = None;
@@ -758,6 +851,11 @@ impl Studio {
         if self.agent.log.is_empty() && !self.agent.running() {
             self.agent.forget_document();
         }
+    }
+
+    /// The plan shown is of the document as it is now.
+    pub(crate) fn plan_is_current(&self) -> bool {
+        !self.dirty && !self.planner.pending && !self.plan_cut
     }
 
     pub fn replan(&mut self) {
@@ -800,7 +898,7 @@ impl Studio {
         // supersedes any still out.
         self.planner.took(self.plan_ms);
         self.planner.superseded();
-        self.names = svg::display_names(&self.doc.shapes);
+        self.names = self.doc.object_names();
         self.dirty = false;
     }
 
@@ -1284,6 +1382,120 @@ impl Studio {
             .collect()
     }
 
+    /// The objects with `uids` moved to just before the one with uid
+    /// `before` (none: to the end) in `d`'s sewing order, keeping their own
+    /// order among themselves.
+    pub(crate) fn reorder(d: &mut Document, uids: &[usize], before: Option<usize>) {
+        let (moving, stays): (Vec<_>, Vec<_>) = std::mem::take(&mut d.shapes)
+            .into_iter()
+            .partition(|s| uids.contains(&s.uid));
+        let at = before
+            .and_then(|u| stays.iter().position(|s| s.uid == u))
+            .unwrap_or(stays.len());
+        let mut stays = stays;
+        let rest = stays.split_off(at);
+        d.shapes = stays.into_iter().chain(moving).chain(rest).collect();
+    }
+
+    /// Layers dropped in the Layers list: the objects at `moving` put into
+    /// the group `group` (None: out of every group) and sewn just before
+    /// the one at `before` (past the last: at the end). One undo step.
+    /// False when nothing came of it.
+    pub(crate) fn drop_layers(
+        &mut self,
+        moving: &[usize],
+        before: usize,
+        group: Option<&str>,
+    ) -> bool {
+        let uids: Vec<usize> = moving
+            .iter()
+            .filter_map(|&i| self.doc.shapes.get(i))
+            .map(|s| s.uid)
+            .collect();
+        // (The first that isn't moving, from there on: where they go.)
+        let before = (before..self.doc.shapes.len())
+            .find(|i| !moving.contains(i))
+            .map(|i| self.doc.shapes[i].uid);
+        let label = match moving {
+            [i] => self.names.get(*i).cloned().unwrap_or_default(),
+            many => format!("{} layers", many.len()),
+        };
+        let moving = moving.to_vec();
+        let done = self.structural(|d| {
+            d.regroup(&moving, group)?;
+            Self::reorder(d, &uids, before);
+            Ok(())
+        });
+        match done {
+            Ok(()) => {
+                self.status = match group {
+                    Some(g) => format!("Moved {label} into {}.", self.group_label(g)),
+                    None => format!("Moved {label} out of its group."),
+                };
+                true
+            }
+            Err(e) => {
+                self.status = format!("Couldn't move {label}: {e}");
+                false
+            }
+        }
+    }
+
+    /// Object › Group: the selected objects made one group, sewn together
+    /// where the last of them is.
+    pub fn group_selected(&mut self) {
+        let sel = self.sel_indices();
+        if self.subjects().len() < 2 {
+            self.status = "Select two or more layers to group.".into();
+            return;
+        }
+        let uids: Vec<usize> = sel.iter().map(|&i| self.doc.shapes[i].uid).collect();
+        let last = sel.iter().copied().max().unwrap_or(0);
+        let before = self.doc.shapes.get(last + 1).map(|s| s.uid);
+        let mut made = None;
+        let done = self.structural(|d| {
+            made = Some(d.group(&sel)?);
+            Self::reorder(d, &uids, before);
+            Ok(())
+        });
+        match done {
+            Ok(()) => {
+                // (Shown shut, as one thing, and selected as that.)
+                let members = made.map(|g| self.group_members(&g)).unwrap_or_default();
+                self.set_selection(&members);
+                self.status = format!("Grouped {} layers.", members.len());
+            }
+            Err(e) => self.status = format!("Couldn't group: {e}"),
+        }
+    }
+
+    /// Object › Ungroup: the selected objects taken out of the group each
+    /// is in (a group left empty is gone).
+    pub fn ungroup_selected(&mut self) {
+        let sel = self.sel_indices();
+        let uids: Vec<usize> = sel.iter().map(|&i| self.doc.shapes[i].uid).collect();
+        let mut out = 0;
+        let done = self.structural(|d| {
+            out = d.ungroup(&sel)?;
+            if out == 0 {
+                anyhow::bail!("nothing selected is in a group");
+            }
+            Ok(())
+        });
+        match done {
+            Ok(()) => {
+                let now = self.uid_indices(&uids);
+                self.set_selection(&now);
+                self.status = format!(
+                    "Took {out} {} out of {} group.",
+                    if out == 1 { "layer" } else { "layers" },
+                    if out == 1 { "its" } else { "their" }
+                );
+            }
+            Err(e) => self.status = format!("Couldn't ungroup: {e}"),
+        }
+    }
+
     /// Move the objects at `moving` to just before the one at `before`
     /// (as they're numbered now; past the last: to the end) in the sewing
     /// order, keeping their own order among themselves. One undo step;
@@ -1334,13 +1546,20 @@ impl Studio {
         }
     }
 
-    /// Add an SVG file's artwork to the document (Illustrator's Place).
+    /// Add a file's artwork to the document (Illustrator's Place): an SVG,
+    /// an image to trace, or a machine file, whose stitches come in as
+    /// manual-stitch objects at the size they were digitized.
     pub fn place_svg(&mut self, path: &Path) {
-        if path
+        let ext = path
             .extension()
-            .is_some_and(|e| zigzag::trace::is_image(&e.to_string_lossy()))
-        {
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if zigzag::trace::is_image(&ext) {
             self.open_image(path, crate::trace_ui::Target::Place);
+            return;
+        }
+        if zigzag::formats::READABLE_FORMATS.contains(&ext.as_str()) {
+            self.place_stitches(path, &ext);
             return;
         }
         let text = match std::fs::read_to_string(path) {
@@ -1371,13 +1590,45 @@ impl Studio {
     }
 }
 
+impl Studio {
+    /// Place a machine file: its stitches come in as manual stitches at the
+    /// size they were digitized (scaled, they'd be longer or shorter than
+    /// they were made to be), in one group named after the file, selected.
+    fn place_stitches(&mut self, path: &Path, ext: &str) {
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.status = format!("Couldn't read {}: {e}", path.display());
+                return;
+            }
+        };
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut added = Vec::new();
+        match self.structural(|d| {
+            added =
+                d.place_stitch_file(&bytes, ext, &name, zigzag::document::Placement::default())?;
+            Ok(())
+        }) {
+            Ok(()) => {
+                self.set_selection(&added);
+                self.status = format!("Placed {} ({} objects).", path.display(), added.len());
+            }
+            // (Not a file of the kind its name says, or one with no stitches.)
+            Err(e) => self.status = format!("Couldn't read {}: {e:#}", path.display()),
+        }
+    }
+}
+
 impl eframe::App for Studio {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_file_dialog();
         if let Some(c) = &mut self.capture {
             c.frame(ctx);
         }
-        let calls_done = self.handle_mcp();
+        let calls_done = self.handle_mcp(Some(ctx));
         let handed_done = self.take_handed_over(ctx);
         if !(calls_done && handed_done) {
             // Calls (or files from another launch) may be waiting on a
@@ -1448,25 +1699,96 @@ impl eframe::App for Studio {
     }
 }
 
+/// An MCP call made, its answer waiting for the worker's plan (see
+/// [`Studio::handle_mcp`]): the answer so far, the design problems before
+/// it, and the document it was made in.
+pub(crate) struct WaitingCall {
+    call: crate::mcp::Call,
+    at: Instant,
+    result: crate::mcp::ToolResult,
+    before: Vec<(Option<String>, String)>,
+    tab: usize,
+    rec: u32,
+}
+
 impl Studio {
     /// Answer queued MCP tool calls (on the UI thread, between frames).
     /// False when they have to wait.
-    pub fn handle_mcp(&mut self) -> bool {
+    ///
+    /// With `ctx` (the app; tests may pass none), a big design's edit
+    /// asked for a short answer is made here and its stitches planned on
+    /// the worker, as the person's own edits are: the answer goes once the
+    /// plan is back (it says what the edit broke), and the next call waits
+    /// for it, so each still starts from the stitches as they are. The
+    /// window keeps drawing meanwhile, where planning here would freeze it.
+    pub fn handle_mcp(&mut self, ctx: Option<&egui::Context>) -> bool {
         if self.mcp.is_none() {
             return true;
+        }
+        if self.mcp_waiting.is_some() || self.planner.pending {
+            // (The worker wakes the window when it's done.)
+            self.take_plan();
+            if self.planner.pending {
+                return true;
+            }
+            if let Some(w) = self.mcp_waiting.take() {
+                // The plan it waited for never came (set aside for a look
+                // at another tab, or the worker failed): planned here, so
+                // the answer isn't about the stitches from before the edit.
+                if self.dirty && (self.tabs.active, self.session.rec) == (w.tab, w.rec) {
+                    self.replan();
+                }
+                self.answer_waiting(w);
+            }
         }
         if self.mid_gesture() {
             return false;
         }
-        let calls: Vec<crate::mcp::Call> = match &self.mcp {
-            Some(server) => server.rx.try_iter().collect(),
-            None => return true,
-        };
-        for call in calls {
+        // One at a time: a call that leaves its answer waiting on the
+        // worker holds the rest back, in order.
+        while let Some(call) = self.mcp.as_ref().and_then(|s| s.rx.try_recv().ok()) {
             let at = Instant::now();
             // Its client gave up waiting (a dialog was open): it was told
             // the call failed, so running it now would surprise it.
             if at > call.deadline {
+                continue;
+            }
+            if let Some(ctx) = ctx
+                && self.plans_later(&call)
+            {
+                let before = self.problems();
+                let (tab, rec) = (self.tabs.active, self.session.rec);
+                self.batching = true;
+                let result = self.answer_call(&call.name, &call.args, call.panel);
+                self.batching = false;
+                if self.undo.len() > UNDO_STEPS {
+                    let extra = self.undo.len() - UNDO_STEPS;
+                    self.undo.drain(..extra);
+                }
+                let w = WaitingCall {
+                    call,
+                    at,
+                    result,
+                    before,
+                    tab,
+                    rec,
+                };
+                if w.result.is_error || !(self.dirty || self.dirty_needs_plan()) {
+                    // (A call that changed something and then failed: the
+                    // next starts from the stitches as they are.)
+                    if self.dirty || self.dirty_needs_plan() {
+                        self.replan();
+                    }
+                    self.answer_waiting(w);
+                    continue;
+                }
+                self.plan_changes(ctx);
+                if self.planner.pending {
+                    self.mcp_waiting = Some(w);
+                    return true;
+                }
+                // (Planned here after all.)
+                self.answer_waiting(w);
                 continue;
             }
             let result = self.answer_call(&call.name, &call.args, call.panel);
@@ -1477,11 +1799,56 @@ impl Studio {
         true
     }
 
+    /// Whether `call` is one [`handle_mcp`] answers once the worker has
+    /// planned what it changed: a short answer asked for, on a design big
+    /// enough to plan on the worker, in the document in front, by a tool
+    /// that edits without reading the stitches (or switching documents).
+    fn plans_later(&self, call: &crate::mcp::Call) -> bool {
+        let tool = call.name.as_str();
+        self.planner.slow
+            && call.args.get("terse").and_then(serde_json::Value::as_bool) == Some(true)
+            && !crate::tools::reads_stitches(tool)
+            && !matches!(tool, "batch" | "trace_image" | "undo" | "redo")
+            && !changes_tabs(tool, &call.args)
+            && self
+                .agent_tab()
+                .filter(|_| call.panel)
+                .is_none_or(|chat| {
+                    self.agent.follow.and_then(|rec| self.tab_of(rec)).unwrap_or(chat)
+                        == self.tabs.active
+                })
+    }
+
+    /// Send a waiting call's answer, with the design problems its edit
+    /// made (unless the document in front changed while it waited).
+    fn answer_waiting(&mut self, w: WaitingCall) {
+        let mut result = w.result;
+        if !result.is_error
+            && (self.tabs.active, self.session.rec) == (w.tab, w.rec)
+            && let Some(crate::mcp::Content::Text(text)) = result.content.first_mut()
+            && let Ok(mut v @ serde_json::Value::Object(_)) =
+                serde_json::from_str::<serde_json::Value>(text)
+        {
+            if self.planner.failed {
+                // (No plan of the edit to check: said, not passed off as
+                // nothing new being wrong.)
+                v["plan_failed"] = "The stitches couldn't be planned after this edit, so its problems aren't known. Undo it, or change the object and try again.".into();
+            } else {
+                v["new_problems"] = serde_json::Value::Array(self.new_problems(&w.before));
+            }
+            *text = v.to_string();
+        }
+        let call = w.call;
+        self.mcp_ui.note(&call.name, &call.args, w.at, &result);
+        self.log_call(&call.name, &call.args, w.at, &result);
+        let _ = call.reply.send(result);
+    }
+
     /// A dialog previews into the document, or something is dragged: an
     /// agent's call or another launch's file waits (the drag works from the
     /// document as it was when it began, and would drop an edit made under
     /// it).
-    fn mid_gesture(&self) -> bool {
+    pub(crate) fn mid_gesture(&self) -> bool {
         self.previewing()
             || self.file_dialog_open()
             || self.drag.is_some()
@@ -1496,12 +1863,10 @@ impl Studio {
         if std::mem::take(&mut self.focus_again) {
             ctx.send_viewport_cmd(ViewportCommand::Focus);
         }
-        if self.inbox.is_none() {
-            return true;
-        }
         if self.mid_gesture() {
             return false;
         }
+        self.take_links(ctx);
         let requests = match &self.inbox {
             Some(i) => i.take(),
             None => return true,
@@ -1519,8 +1884,34 @@ impl Studio {
         true
     }
 
+    /// What `zigzag://` links brought (see `link`): a downloaded design
+    /// opens in a tab, in front, like a file opened with ZigZag.
+    pub(crate) fn take_links(&mut self, ctx: &egui::Context) {
+        use crate::link::Event;
+        let mut opened = false;
+        for e in crate::link::take() {
+            match e {
+                Event::Started(name) => self.status = format!("Downloading {name}…"),
+                Event::Failed(why) => self.status = why,
+                Event::Ready(path) => {
+                    self.load(&path);
+                    opened = true;
+                }
+            }
+        }
+        if opened {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            self.focus_again = true;
+            ctx.request_repaint();
+        }
+    }
+
     /// Another launch's files, as if they'd been opened here.
     pub(crate) fn open_handed_over(&mut self, r: &crate::instance::Request) {
+        for l in &r.links {
+            crate::link::open(l);
+        }
         for f in &r.files {
             self.load(f);
         }
@@ -1534,6 +1925,9 @@ impl Studio {
     /// One UI frame. Separate from `eframe::App::ui` so tests can drive it with plain egui.
     pub fn frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // Settings that follow you, while signed in (see `sync`).
+        self.take_account_news();
+        self.sync_tick(&ctx);
         crate::units::set_current(self.dock.units);
         crate::profile::begin();
         self.sync_ui_scale(&ctx);
@@ -1621,7 +2015,7 @@ impl Studio {
             )
             .show(ui, |ui| self.status_bar(ui));
         egui::Panel::left("tools")
-            .exact_size(44.0)
+            .exact_size(crate::chrome::TOOLS_W)
             .resizable(false)
             .frame(egui::Frame::new().fill(pal.dock))
             .show(ui, |ui| self.tool_strip(ui));
@@ -1724,6 +2118,7 @@ impl Studio {
         self.machine_window(&ctx);
         self.cleanup_window(&ctx);
         self.swatch_window(&ctx);
+        self.share_window(&ctx);
         self.shape_window(&ctx);
         self.rotate_window(&ctx);
         self.trace_window(&ctx);
@@ -2377,7 +2772,7 @@ impl Studio {
                             ui.add_space(crate::theme::space::XS);
                             let n = self.layout.isolated.len();
                             let crumbs: Vec<String> = std::iter::once("Document".to_string())
-                                .chain(self.layout.isolated.iter().map(|g| Self::group_label(g)))
+                                .chain(self.layout.isolated.iter().map(|g| self.group_label(g)))
                                 .collect();
                             for (k, name) in crumbs.iter().enumerate() {
                                 if k > 0 {
@@ -2412,9 +2807,27 @@ impl Studio {
         }
     }
 
+    /// Put the floating Agent panel away (its menu's Auto-Hide):
+    /// when the canvas is clicked or another tool picked.
+    pub(crate) fn auto_hide_agent(&mut self) {
+        use crate::dock::{PanelId, Place};
+        let p = PanelId::Agent;
+        if self.dock.agent_auto_hide
+            && self.dock.place_of(p) == Place::Float
+            && self.dock.visible(p)
+        {
+            self.dock.toggle(p);
+        }
+    }
+
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let (resp, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let rect = resp.rect;
+        // Working on the canvas puts a floating Agent panel away, if that's
+        // asked for (not while pinning notes for it).
+        if !self.review.annotating && (resp.clicked() || resp.drag_started()) {
+            self.auto_hide_agent();
+        }
         // Pinning notes: clicks and drags are for that, not the tools
         // (this sits over the canvas, so the tools' response sees none).
         let notes = self.review.annotating.then(|| {
@@ -2529,7 +2942,7 @@ impl Studio {
             let mods = crate::layout::DragMods {
                 shift,
                 alt,
-                snap: self.view_tools.smart_guides,
+                snap: self.prefs.smart_guides,
                 tol,
             };
             self.direct_canvas(&ctx, &resp, rect, tol, mods);
@@ -2538,7 +2951,7 @@ impl Studio {
             let mods = crate::layout::DragMods {
                 shift,
                 alt,
-                snap: self.view_tools.smart_guides,
+                snap: self.prefs.smart_guides,
                 tol,
             };
             self.anchor_canvas(&ctx, &resp, rect, tol, mods);
@@ -2635,7 +3048,7 @@ impl Studio {
                 let mods = crate::layout::DragMods {
                     shift,
                     alt,
-                    snap: self.view_tools.smart_guides,
+                    snap: self.prefs.smart_guides,
                     tol,
                 };
                 self.update_drag(self.view.to_design(rect, pos), mods);
@@ -2791,7 +3204,7 @@ impl Studio {
             crate::view_tools::draw_grid(&painter, rect, &self.view);
         }
         let opts = DrawOptions {
-            show_jumps: self.show_jumps,
+            show_jumps: self.prefs.show_jumps,
             limit: self.player.unwrap_or(usize::MAX),
             thread_mm: 0.4,
             view: self.view_tools.stitch_view,
@@ -3074,6 +3487,7 @@ pub(crate) fn give_settings(shape: &mut Shape, src: &Params) {
         start: own.start,
         end: own.end,
         trim: own.trim,
+        trim_before: own.trim_before,
         stop: own.stop,
         lock: own.lock,
         hide: own.hide,
@@ -3891,6 +4305,124 @@ mod tests {
             .state()
             .group_members(&h.state().doc.shapes[line].groups[0]);
         assert_eq!(sorted_sel(&h), lines);
+    }
+
+    /// Every machine format on the Export menu also opens, and places into
+    /// another design, with every stitch where the file has it.
+    #[test]
+    fn machine_files_open_and_place_stitch_for_stitch() {
+        use std::collections::HashSet;
+        use zigzag::formats::read::read_stitch_file;
+        use zigzag::geom::Bounds;
+        let dir = std::env::temp_dir().join(format!("tl-machine-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let badge = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/badge.svg"));
+        let mut source = Studio::with_file(Some(badge.clone()), None);
+        let bounds = |pts: &[P]| {
+            let mut b = Bounds::empty();
+            pts.iter().for_each(|p| b.add(*p));
+            b
+        };
+        // Every stitch of the file is in the plan, the whole design moved
+        // by one shift (a file's origin isn't the hoop's center).
+        let same_stitches = |s: &mut Studio, file: &[P], what: &str| {
+            s.plan_now();
+            let plan: Vec<P> = s
+                .design
+                .blocks
+                .iter()
+                .flat_map(|b| b.runs.iter().flat_map(|r| r.pts.iter().copied()))
+                .collect();
+            let shift = bounds(&plan).min - bounds(file).min;
+            let have: HashSet<(i64, i64)> = plan
+                .iter()
+                .map(|q| {
+                    let q = *q - shift;
+                    assert!(
+                        (q.x - q.x.round()).abs() < 0.01 && (q.y - q.y.round()).abs() < 0.01,
+                        "{what}: {q:?} is off the file's 0.1 mm grid"
+                    );
+                    (q.x.round() as i64, q.y.round() as i64)
+                })
+                .collect();
+            for p in file {
+                assert!(
+                    have.contains(&(p.x.round() as i64, p.y.round() as i64)),
+                    "{what}: the stitch at {p:?} moved or went missing"
+                );
+            }
+        };
+        for ext in ["pes", "dst", "exp", "jef", "vp3"] {
+            let path = dir.join(format!("badge.{ext}"));
+            source.export_to(ext, &path).unwrap();
+            let file = read_stitch_file(&std::fs::read(&path).unwrap(), ext).unwrap();
+            let runs: usize = file.blocks.iter().map(|b| b.runs.len()).sum();
+            let pts: Vec<P> = file
+                .blocks
+                .iter()
+                .flat_map(|b| b.runs.iter().flatten().copied())
+                .collect();
+            assert!(pts.len() > 1000, "{ext}: {} stitches read", pts.len());
+            let size = bounds(&pts);
+            let manual = |s: &Studio, idx: &[usize]| {
+                idx.iter()
+                    .all(|&i| s.doc.shapes[i].params.kind == Some(Kind::Manual))
+            };
+
+            // Open.
+            let mut s = Studio::with_file(Some(path.clone()), None);
+            assert!(s.status.starts_with("Opened"), "{ext}: {}", s.status);
+            let all: Vec<usize> = (0..s.doc.shapes.len()).collect();
+            assert_eq!(all.len(), runs, "{ext}: an object for each run");
+            assert!(manual(&s, &all), "{ext}: opened as manual stitches");
+            assert!(s.doc.path.is_none(), "{ext}: never saved over as SVG");
+            same_stitches(&mut s, &pts, &format!("open {ext}"));
+
+            // Place, into an empty design.
+            let mut s = Studio::with_file(None, None);
+            s.place_svg(&path);
+            assert!(s.status.starts_with("Placed"), "{ext}: {}", s.status);
+            let added = s.sel_indices();
+            assert_eq!(added.len(), runs, "{ext}: every run placed and selected");
+            assert!(manual(&s, &added), "{ext}: placed as manual stitches");
+            same_stitches(&mut s, &pts, &format!("place {ext}"));
+
+            // Place, beside artwork that's already there: at the size it
+            // was digitized, the artwork untouched, one undo step.
+            let mut s = Studio::with_file(Some(badge.clone()), None);
+            let before = s.doc.shapes.len();
+            s.place_svg(&path);
+            assert!(s.status.starts_with("Placed"), "{ext}: {}", s.status);
+            let added = s.sel_indices();
+            assert_eq!(s.doc.shapes.len(), before + runs, "{ext}");
+            assert!(added.iter().all(|&i| i >= before), "{ext}: {added:?}");
+            assert!(manual(&s, &added), "{ext}");
+            assert!(
+                !manual(&s, &[0]),
+                "{ext}: the artwork keeps its stitch type"
+            );
+            let b = s.art_bounds(&added);
+            // (A manual run's 0.4 mm line: 0.2 mm past its points all round.)
+            assert!(
+                (b.width() - size.width() - 4.0).abs() < 0.5
+                    && (b.height() - size.height() - 4.0).abs() < 0.5,
+                "{ext}: placed {}x{}, the file is {}x{}",
+                b.width(),
+                b.height(),
+                size.width(),
+                size.height()
+            );
+            assert_eq!(s.undo.len(), 1, "{ext}");
+        }
+        // A file that isn't what its name says: an error, nothing added.
+        let bad = dir.join("bad.vp3");
+        std::fs::write(&bad, b"not a vp3").unwrap();
+        let mut s = Studio::with_file(None, None);
+        let before = s.doc.shapes.len();
+        s.place_svg(&bad);
+        assert!(s.status.starts_with("Couldn't read"), "{}", s.status);
+        assert_eq!(s.doc.shapes.len(), before);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

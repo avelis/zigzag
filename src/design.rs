@@ -250,12 +250,17 @@ impl Backdrop<'_> {
                 if n != END && prev.dist(q) + q.dist(start) > most {
                     continue;
                 }
+                // (Each half of the step by how much it shows there: one
+                // look at its middle misses a corner it cuts.)
                 let len = p.dist(q);
-                let r = reach(self.shows_at(p.lerp(q, 0.5), start));
-                if r <= 0.0 {
+                let (r0, r1) = (
+                    reach(self.shows_at(p.lerp(q, 0.25), start)),
+                    reach(self.shows_at(p.lerp(q, 0.75), start)),
+                );
+                if r0 <= 0.0 || r1 <= 0.0 {
                     continue;
                 }
-                let ng = g + len / r;
+                let ng = g + len * 0.5 / r0 + len * 0.5 / r1;
                 if ng > budget + 1e-9 || cost.get(&n).is_some_and(|&best| ng >= best - 1e-9) {
                     continue;
                 }
@@ -2755,7 +2760,7 @@ fn joined_satin(shapes: &[Shape], order: &[usize], pos: usize) -> Option<(Vec<us
     // (Settings but for what happens after: that's the last one's to say.)
     let settings_of = |s: &Shape| {
         let mut p = s.params.clone();
-        (p.trim, p.stop) = (None, None);
+        (p.trim, p.stop, p.trim_before) = (None, None, None);
         format!("{p:?}")
     };
     let ends = |s: &Shape| s.params.trim == Some(true) || s.params.stop == Some(true);
@@ -2764,6 +2769,7 @@ fn joined_satin(shapes: &[Shape], order: &[usize], pos: usize) -> Option<(Vec<us
     for &j in &order[pos..] {
         let s = &shapes[j];
         if column(s).is_none()
+            || (!members.is_empty() && s.params.trim_before == Some(true))
             || s.groups != first.groups
             || s.color != first.color
             || settings_of(s) != settings
@@ -2979,6 +2985,7 @@ fn shorten_travel(shapes: &[Shape], order: &mut [usize]) {
             && p.start.is_none()
             && p.end.is_none()
             && p.trim != Some(true)
+            && p.trim_before != Some(true)
             && p.stop != Some(true)
             && p.colors.as_ref().is_none_or(|c| c.len() < 2)
             && satin_column(s).is_none()
@@ -3450,6 +3457,29 @@ fn plan_shown(name: &str, shapes: &[Shape], opt: &PlanOptions, cache: &mut PlanC
             .params
             .end
             .and_then(|t| outline_at(&shape.geometry, t));
+        // What a straight stitch between two of the shape's stitches is
+        // hidden under: the outline, grown by as far as a fill's rows
+        // reach past it (widened for pull) and a little more, so a row's
+        // end is inside it, not on its edge (judged on the edge, a line
+        // from one goes in or out by where its samples happen to fall,
+        // which changes when the shape is moved).
+        let row_past = if shape.params.kind == Some(Kind::Fill) {
+            mm(shape.params.fill_pull(&opt.fabric)).max(0.0)
+        } else {
+            0.0
+        };
+        let grown = |(rings, rule): &(Vec<Polyline>, FillRule)| -> (Vec<Polyline>, FillRule) {
+            if row_past > 0.0 {
+                (
+                    boolean::offset(rings, *rule, row_past + 1.0),
+                    FillRule::NonZero,
+                )
+            } else {
+                (rings.clone(), *rule)
+            }
+        };
+        let covered: std::cell::OnceCell<Option<(Vec<Polyline>, FillRule)>> =
+            std::cell::OnceCell::new();
         // This shape's stitches: kept from last time when its outline, what's
         // left of it after overlaps, its settings and the options are the same.
         let key = {
@@ -3494,6 +3524,8 @@ fn plan_shown(name: &str, shapes: &[Shape], opt: &PlanOptions, cache: &mut PlanC
             design.block_shapes.push(Vec::new());
             design.stitch_shapes.push(Vec::new());
         }
+        // Consume this request only at the first sewn piece, alongside any prior cut.
+        force_trim |= shape.params.trim_before == Some(true);
         let last_group = sr.groups.iter().rposition(|g| !g.is_empty()).unwrap_or(0);
         let tops = sr.tops.clone();
         // The object sewn next in the same thread, if nothing says to cut
@@ -3507,6 +3539,7 @@ fn plan_shown(name: &str, shapes: &[Shape], opt: &PlanOptions, cache: &mut PlanC
                 shapes[j].color == shape.color
                     && sr.colors.is_empty()
                     && sr.stops.is_empty()
+                    && shapes[j].params.trim_before != Some(true)
                     && shape.params.trim != Some(true)
                     && shape.params.stop != Some(true)
             })
@@ -3644,12 +3677,15 @@ fn plan_shown(name: &str, shapes: &[Shape], opt: &PlanOptions, cache: &mut PlanC
             |prev: P, start: P, force_trim: bool, same_shape: bool| -> (Option<Vec<P>>, bool) {
                 let gap = prev.dist(start);
                 how.set(TravelHow::Across);
-                let inside = sr.area.as_ref().is_some_and(|(rings, rule)| {
-                    gap <= opt.travel_inside
-                        && segment_inside(rings, *rule, prev, start, 2.0)
-                        && (opt.over_sewn
-                            || crossings(&[prev, start], &fill_sewn.borrow()) <= FEW_ROWS)
-                });
+                let inside = covered
+                    .get_or_init(|| sr.area.as_ref().map(grown))
+                    .as_ref()
+                    .is_some_and(|(rings, rule)| {
+                        gap <= opt.travel_inside
+                            && segment_inside(rings, *rule, prev, start, 2.0)
+                            && (opt.over_sewn
+                                || crossings(&[prev, start], &fill_sewn.borrow()) <= FEW_ROWS)
+                    });
                 let straight = || -> Vec<P> {
                     let n = (gap / 30.0).ceil() as usize;
                     (1..n)
@@ -4144,6 +4180,8 @@ fn plan_shown(name: &str, shapes: &[Shape], opt: &PlanOptions, cache: &mut PlanC
                 let mut known: HashMap<Step, bool> = HashMap::new();
                 let mut best: Option<(usize, PieceOrder)> = None;
                 let (mut expected, mut searches) = (None, 0);
+                // (The steps those searches took between them.)
+                let mut searched = 0;
                 for _ in 0..ORDER_SEARCHES {
                     let Some(plan) = column_order(
                         &group,
@@ -4170,7 +4208,8 @@ fn plan_shown(name: &str, shapes: &[Shape], opt: &PlanOptions, cache: &mut PlanC
                     if best.as_ref().is_none_or(|b| cuts < b.0) {
                         best = Some((cuts, plan.order));
                     }
-                    if cuts == plan.expected || !learned {
+                    searched += plan.searched;
+                    if cuts == plan.expected || !learned || searched >= ORDER_SEARCH_STEPS {
                         break;
                     }
                 }
@@ -4215,12 +4254,15 @@ fn plan_shown(name: &str, shapes: &[Shape], opt: &PlanOptions, cache: &mut PlanC
                 && gi == last_group
                 && start_at.is_none()
                 && end_at.is_none()
-                && let Some(area) = sr.area.as_ref()
+                && let Some(area) = covered.get_or_init(|| sr.area.as_ref().map(grown)).as_ref()
                 && let Some(order) = section_order(
                     &group,
                     cursor,
                     area,
-                    travel.get_or_init(|| kept.travel_ring(&area.0, area.1)),
+                    travel.get_or_init(|| {
+                        let (rings, rule) = sr.area.as_ref().unwrap();
+                        kept.travel_ring(rings, *rule)
+                    }),
                     opt,
                 )
             {
@@ -4396,7 +4438,8 @@ fn plan_shown(name: &str, shapes: &[Shape], opt: &PlanOptions, cache: &mut PlanC
                 // starts at its nearest end).
                 if from_start
                     && let Some(st) = start_at
-                    && let Some((rings, rule)) = sr.area.as_ref()
+                    && let Some((rings, rule)) =
+                        covered.get_or_init(|| sr.area.as_ref().map(grown)).as_ref()
                     && st.dist(pts[0]) > opt.min_stitch
                     && segment_inside(rings, *rule, st, pts[0], 2.0)
                 {
@@ -4664,6 +4707,12 @@ const ORDER_BUDGET: usize = 30_000;
 /// a bound on the time. (Most of the census's letters stop after one;
 /// a few dozen go on, and one or two take all of these.)
 const ORDER_SEARCHES: usize = 50;
+/// The most steps those searches take between them: a bound on the time
+/// for a satin of many letters (a line of type), where each search can use
+/// all of [`ORDER_BUDGET`] and the next learns little (2026-11-21: a 38
+/// column line searched 50 times over in 9 s, none better than the first).
+/// Over the letter census no satin comes near it.
+const ORDER_SEARCH_STEPS: usize = 5 * ORDER_BUDGET;
 
 /// An order to sew a satin's pieces in: each piece, whether it's sewn
 /// from its other end, and where it leaves the thread if not where its
@@ -4675,6 +4724,8 @@ type PieceOrder = Vec<(usize, bool, Option<P>)>;
 /// each came to, tried out: see [`Step`]), and the order going to the
 /// nearest piece each time would take (`first`), for comparison.
 struct ColumnPlan {
+    /// How many steps its search took (see [`ORDER_BUDGET`]).
+    searched: usize,
     order: PieceOrder,
     steps: Vec<Step>,
     expected: usize,
@@ -4782,6 +4833,7 @@ fn column_order(
         })
         .collect();
     Some(ColumnPlan {
+        searched: found.searched,
         order: as_pieces(&found.order),
         steps,
         expected: found.cuts,
@@ -4957,6 +5009,8 @@ struct ColumnWay {
 /// the nearest each time would take (`first`), likewise.
 struct ColumnOrder {
     cuts: usize,
+    /// How many steps the search took.
+    searched: usize,
     order: Vec<usize>,
     first: Vec<usize>,
 }
@@ -5058,6 +5112,7 @@ fn fewest_cuts(
     let mut here = from;
     let mut found = ColumnOrder {
         cuts: 0,
+        searched: 0,
         order: Vec::with_capacity(n),
         first: Vec::with_capacity(n),
     };
@@ -5106,6 +5161,7 @@ fn fewest_cuts(
             usize::MAX,
         )?;
         found.cuts += one.cuts;
+        found.searched += one.searched;
         here = one.order.last().map(|&w| ways[w].end).or(here);
         found.order.extend(one.order.iter().map(|&w| which[w]));
         found.first.extend(one.first.iter().map(|&w| which[w]));
@@ -5251,6 +5307,8 @@ fn letter_cuts(
         known: &'a HashMap<Step, bool>,
         before: usize,
         budget: usize,
+        /// The steps taken.
+        steps: usize,
         /// Only orders of fewer cuts than this are wanted.
         below: usize,
         first: Option<(usize, Vec<usize>)>,
@@ -5297,6 +5355,7 @@ fn letter_cuts(
                 }
             }
             self.budget = self.budget.saturating_sub(1);
+            self.steps += 1;
             if self.path.len() == self.count {
                 let last = &self.ways[*self.path.last().unwrap()];
                 let cuts = cuts + self.reaches_next.is_some_and(|f| !f(last.end)) as usize;
@@ -5358,6 +5417,7 @@ fn letter_cuts(
     let mut order: Vec<usize> = Vec::with_capacity(n);
     let mut first_order: Vec<usize> = Vec::with_capacity(n);
     let mut total = 0;
+    let mut searched = 0;
     while !letters.is_empty() {
         let reach = |letter: &Vec<usize>| {
             here.map_or(0.0, |p| {
@@ -5389,6 +5449,7 @@ fn letter_cuts(
             // order it finds in that time. In the order drawn, there are
             // only a few ways to each.)
             budget: if drawn { usize::MAX } else { ORDER_BUDGET },
+            steps: 0,
             below,
             first: None,
             best: None,
@@ -5396,6 +5457,7 @@ fn letter_cuts(
             seen: std::collections::HashMap::new(),
         };
         search.go(here, sewn, 0);
+        searched += search.steps;
         let (first, (cuts, path)) = (search.first?, search.best?);
         total += cuts;
         first_order.extend(first.1);
@@ -5408,6 +5470,7 @@ fn letter_cuts(
     }
     Some(ColumnOrder {
         cuts: total,
+        searched,
         order,
         first: first_order,
     })
@@ -7038,6 +7101,133 @@ mod tests {
     }
 
     #[test]
+    fn trim_before_joined_satin_only_cuts_at_entry() {
+        let column = |x| {
+            let mut s = shape(
+                Geometry::Stroke {
+                    lines: vec![
+                        (vec![P::new(x, 0.0), P::new(x, 100.0)], false),
+                        (vec![P::new(x + 20.0, 0.0), P::new(x + 20.0, 100.0)], false),
+                    ],
+                    width: 20.0,
+                },
+                Kind::Satin,
+                [0; 3],
+            );
+            s.groups = vec!["columns".into()];
+            s.params.rails = Some((1, 2));
+            s
+        };
+        let mut a = column(0.0);
+        let mut b = column(20.0);
+        a.params.trim_before = Some(true);
+        let (_, joined) = joined_satin(&[a.clone(), b.clone()], &[0, 1], 0).unwrap();
+        assert_eq!(joined.params.trim_before, Some(true));
+        assert_eq!(
+            plan("p", &[a.clone(), b.clone()], &PlanOptions::default()).trim_count(),
+            0
+        );
+        let prior = shape(fill(sq(-100.0, 0.0, 50.0)), Kind::Fill, [0; 3]);
+        assert_eq!(
+            plan("p", &[prior, a.clone(), b.clone()], &PlanOptions::default()).trim_count(),
+            1
+        );
+        b.params.trim_before = Some(true);
+        assert!(
+            joined_satin(&[a, b], &[0, 1], 0).is_none(),
+            "an explicit boundary splits the join"
+        );
+    }
+
+    #[test]
+    fn trim_before_overrides_a_short_same_color_hop() {
+        let line = |x| {
+            shape(
+                Geometry::Stroke {
+                    lines: vec![(vec![P::new(x, 0.0), P::new(x + 50.0, 0.0)], false)],
+                    width: 1.0,
+                },
+                Kind::Run,
+                [0; 3],
+            )
+        };
+        let a = line(0.0);
+        let mut b = line(55.0);
+        let opt = PlanOptions::default();
+        assert_eq!(plan("p", &[a.clone(), b.clone()], &opt).trim_count(), 0);
+        b.params.trim_before = Some(true);
+        assert_eq!(plan("p", &[a.clone(), b.clone()], &opt).trim_count(), 1);
+        b.params.trim_before = None;
+        assert_eq!(plan("p", &[a, b], &opt).trim_count(), 0);
+    }
+
+    #[test]
+    fn trim_before_is_one_object_boundary_cut() {
+        let mut a = shape(fill(sq(0.0, 0.0, 100.0)), Kind::Fill, [0; 3]);
+        let mut b = shape(fill(sq(130.0, 0.0, 100.0)), Kind::Fill, [0; 3]);
+        let opt = PlanOptions {
+            connect: 150.0,
+            ..PlanOptions::default()
+        };
+        assert_eq!(plan("p", &[a.clone(), b.clone()], &opt).trim_count(), 0);
+        a.params.trim_before = Some(true);
+        assert_eq!(plan("p", &[a.clone()], &opt).trim_count(), 0);
+        b.params.trim_before = Some(true);
+        let d = plan("p", &[a.clone(), b.clone()], &opt);
+        assert_eq!(d.trim_count(), 1);
+        assert!(!d.blocks[0].runs[0].trim_before);
+        assert!(d.blocks[0].runs[1].trim_before);
+        assert!(
+            crate::formats::dst::stream(&d)
+                .iter()
+                .any(|c| c.op == crate::formats::Op::Trim)
+        );
+        a.params.trim = Some(true);
+        assert_eq!(plan("p", &[a.clone(), b.clone()], &opt).trim_count(), 1);
+        let mut empty = shape(fill(Vec::new()), Kind::Fill, [0; 3]);
+        empty.params.trim_before = Some(true);
+        let mut skip = b.clone();
+        skip.params.kind = Some(Kind::Skip);
+        assert_eq!(
+            plan(
+                "p",
+                &[a.clone(), empty.clone(), skip.clone(), b.clone()],
+                &opt
+            )
+            .trim_count(),
+            1
+        );
+        let mut automatic = b.clone();
+        automatic.params.trim_before = None;
+        assert_eq!(
+            plan(
+                "p",
+                &[a.clone(), empty.clone(), skip.clone(), automatic.clone()],
+                &opt
+            )
+            .trim_count(),
+            1
+        );
+        assert_eq!(plan("p", &[empty, skip, automatic], &opt).trim_count(), 0);
+        a.params.trim = None;
+        b.params.via = Some(vec![(20.0, 30.0)]);
+        let d = plan("p", &[a.clone(), b.clone()], &opt);
+        assert_eq!(d.trim_count(), 1);
+        assert!(d.routes.is_empty());
+        b.params.trim_before = None;
+        assert_eq!(plan("p", &[a.clone(), b.clone()], &opt).trim_count(), 0);
+        b.params.trim_before = Some(false);
+        assert_eq!(plan("p", &[a.clone(), b.clone()], &opt).trim_count(), 0);
+        b.color = [255; 3];
+        b.params.trim_before = Some(true);
+        assert_eq!(
+            plan("p", &[a, b], &opt).trim_count(),
+            0,
+            "no prior run in a new thread block"
+        );
+    }
+
+    #[test]
     fn trim_stop_and_connect_between_objects() {
         let a = shape(fill(sq(0.0, 0.0, 100.0)), Kind::Fill, [0; 3]);
         let b = shape(fill(sq(130.0, 0.0, 100.0)), Kind::Fill, [0; 3]);
@@ -7604,9 +7794,11 @@ mod tests {
             .iter()
             .flat_map(|r| r.pts.iter().copied())
             .collect();
+        // (Each row widened for pull, its ends that far past the edge.)
+        let pull = mm(Params::default().fill_pull(&PlanOptions::default().fabric));
         let edge_hits = pts
             .iter()
-            .filter(|p| p.x.abs() < 1e-6 || (p.x - 100.0).abs() < 1e-6)
+            .filter(|p| (p.x + pull).abs() < 1e-6 || (p.x - 100.0 - pull).abs() < 1e-6)
             .count();
         assert_eq!(edge_hits, 80, "40 rows × 2 ends");
         assert_eq!(d.per_shape, vec![pts.len()]);
@@ -7634,12 +7826,14 @@ mod tests {
             0,
             "no base stitches deep under the top object"
         );
-        // ...but the base still reaches 0.5 mm under its edge, so no gap shows.
+        // ...but the base still reaches 0.5 mm under its edge (and its
+        // rows a pull's width more), so no gap shows.
+        let pull = mm(Params::default().fill_pull(&PlanOptions::default().fabric));
         let near_edge = with.blocks[0]
             .runs
             .iter()
             .flat_map(|r| &r.pts)
-            .any(|p| p.x > 52.0 && p.x < 56.0 && p.y > 80.0 && p.y < 120.0);
+            .any(|p| p.x > 52.0 && p.x < 56.0 + pull && p.y > 80.0 && p.y < 120.0);
         assert!(near_edge);
     }
 
@@ -9187,10 +9381,17 @@ mod concave_fill_tests {
                 joined: Vec::new(),
             };
             let d = plan("t", &[s], &PlanOptions::default());
+            // (Rows widened for pull reach that far past the outline, a
+            // notch's sides included: the notch sewn that much narrower
+            // comes out its own width.)
+            let pull = mm(Params::default().fill_pull(&PlanOptions::default().fabric));
+            let m0 = 1.0 + pull;
             for r in d.blocks.iter().flat_map(|b| &b.runs) {
                 for w in r.pts.windows(2) {
                     let m = w[0].lerp(w[1], 0.5);
-                    let in_notch = m.x > 302.0 && m.x < 334.0 && (m.y < 104.0 || m.y > 134.0);
+                    let in_notch = m.x > 301.0 + m0
+                        && m.x < 335.0 - m0
+                        && (m.y < 106.0 - m0 || m.y > 132.0 + m0);
                     assert!(
                         !in_notch,
                         "angle {angle}: stitch {:?} -> {:?} crosses a notch",
