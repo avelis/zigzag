@@ -4105,6 +4105,7 @@ impl Studio {
         theme::section_break(ui);
         let p = pal_ui(ui);
         let picking = self.view_tools.marker_pick;
+        let mut trim_before = None;
         let mut pick: Option<Option<Marker>> = None;
         let mut clear: Option<Marker> = None;
         form_for(ui, "sewing-form", advanced, |fm| {
@@ -4153,7 +4154,7 @@ impl Studio {
                     .on_hover_text("Cut before this object if a thread is running; turn off to let the planner decide")
                     .changed()
                 {
-                    pr.trim_before = Some(before);
+                    trim_before = Some(before);
                 }
                 let mut trim = pr.trim == Some(true);
                 if ui
@@ -4178,6 +4179,10 @@ impl Studio {
                 Marker::Start => pr.start = None,
                 Marker::End => pr.end = None,
             }
+        }
+        if let Some(on) = trim_before {
+            let shape = &mut self.doc.shapes[i];
+            shape.params.trim_before = shape.trim_before_setting(on);
         }
         if let Some(m) = pick {
             self.view_tools.marker_pick = m;

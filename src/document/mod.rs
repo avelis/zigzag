@@ -911,6 +911,10 @@ impl Document {
                 Params {
                     thread: (s.color != s.paint).then_some(s.color),
                     order: write_order.then_some(i as u32),
+                    trim_before: s
+                        .params
+                        .trim_before
+                        .and_then(|on| s.trim_before_setting(on)),
                     ..s.params.clone()
                 }
             };
@@ -931,7 +935,17 @@ impl Document {
                 if has_fill {
                     tokens.extend(toks.into_iter().map(|t| format!("stroke.{t}")));
                 } else {
-                    tokens.extend(toks);
+                    // Even a stroke-only element needs a stroke-specific
+                    // override if a group supplies one.
+                    let stroke_trim = stroke
+                        .is_some_and(|i| self.shapes[i].inherited_stroke_trim_before().is_some());
+                    tokens.extend(toks.into_iter().map(|t| {
+                        if stroke_trim && t.starts_with("trimbefore=") {
+                            format!("stroke.{t}")
+                        } else {
+                            t
+                        }
+                    }));
                 }
             }
             let words = match &self.renaming {

@@ -924,7 +924,7 @@ mod tests {
         assert!(h.state().undo.len() > undos);
         h.get_by_label("Trim Before").click();
         h.run_steps(2);
-        assert_eq!(h.state().doc.shapes[sun].params.trim_before, Some(false));
+        assert_eq!(h.state().doc.shapes[sun].params.trim_before, None);
         h.get_by_label("Trim Before").click();
         h.get_by_label("Trim After").click();
         h.get_by_label("Stop").click();

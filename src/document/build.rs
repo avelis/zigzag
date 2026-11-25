@@ -1452,11 +1452,48 @@ mod tests {
         let mut d = Document::from_svg(svg, "t", None).unwrap();
         assert_eq!(d.shapes[0].params.trim_before, Some(true));
         assert_eq!(d.shapes[1].params.trim_before, Some(true));
-        d.shapes[0].params.trim_before = Some(false);
+        d.shapes[0].params.trim_before = d.shapes[0].trim_before_setting(false);
         d.sync().unwrap();
         let again = Document::from_svg(&d.to_svg().unwrap(), "t", None).unwrap();
         assert_eq!(again.shapes[0].params.trim_before, Some(false));
         assert_eq!(again.shapes[1].params.trim_before, Some(true));
+    }
+
+    #[test]
+    fn trim_before_off_only_overrides_an_inherited_cut() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm" viewBox="0 0 100 100">
+          <rect id="ungrouped_trimbefore" x="0" y="0" width="10" height="10" fill="#123456"/>
+          <g id="outer_trimbefore_stroke.trimbefore=0">
+            <rect id="both_trimbefore_stroke.trimbefore" x="15" y="0" width="10" height="10" fill="#123456" stroke="#abcdef"/>
+            <g id="inner_trimbefore=0_stroke.trimbefore">
+              <rect id="nested_trimbefore_stroke.trimbefore" x="30" y="0" width="10" height="10" fill="#123456" stroke="#abcdef"/>
+              <path id="line_trimbefore" d="M45 0 H55" fill="none" stroke="#abcdef"/>
+            </g>
+          </g>
+        </svg>"##;
+        let mut d = Document::from_svg(svg, "t", None).unwrap();
+        assert_eq!(d.shapes.len(), 6);
+        let expected = [None, Some(false), None, None, Some(false), Some(false)];
+        for (shape, expected) in d.shapes.iter_mut().zip(expected) {
+            shape.params.trim_before = shape.trim_before_setting(false);
+            assert_eq!(shape.params.trim_before, expected, "{}", shape.id);
+        }
+        let again = Document::from_svg(&d.to_svg().unwrap(), "t", None).unwrap();
+        let again = Document::from_svg(&again.to_svg().unwrap(), "t", None).unwrap();
+        // A group may already supply false without an explicit object token.
+        for (shape, expected) in again.shapes.iter().zip(expected) {
+            assert_ne!(shape.params.trim_before, Some(true), "{}", shape.id);
+            let token = if shape.outline
+                || shape.inherited_stroke_trim_before().is_some()
+                    && shape.part == crate::svg::Part::Stroke
+            {
+                "stroke.trimbefore=0"
+            } else {
+                "trimbefore=0"
+            };
+            let has_off = shape.id.split('_').any(|t| t == token);
+            assert_eq!(has_off, expected == Some(false), "{}", shape.id);
+        }
     }
 
     #[test]
