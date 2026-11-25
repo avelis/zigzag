@@ -543,11 +543,7 @@ impl Params {
             }
         }
         if stroke_part {
-            Params {
-                // Within one id, a stroke-specific route overrides the base route.
-                via: stroke.via.clone().or_else(|| base.via.clone()),
-                ..base.merged(&stroke)
-            }
+            base.merged(&stroke)
         } else {
             base
         }
