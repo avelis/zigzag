@@ -898,7 +898,7 @@ impl Studio {
         // supersedes any still out.
         self.planner.took(self.plan_ms);
         self.planner.superseded();
-        self.names = svg::display_names(&self.doc.shapes);
+        self.names = self.doc.object_names();
         self.dirty = false;
     }
 
@@ -1429,7 +1429,7 @@ impl Studio {
         match done {
             Ok(()) => {
                 self.status = match group {
-                    Some(g) => format!("Moved {label} into {}.", Self::group_label(g)),
+                    Some(g) => format!("Moved {label} into {}.", self.group_label(g)),
                     None => format!("Moved {label} out of its group."),
                 };
                 true
@@ -1558,29 +1558,15 @@ impl Studio {
             self.open_image(path, crate::trace_ui::Target::Place);
             return;
         }
-        let stitches = zigzag::formats::READABLE_FORMATS.contains(&ext.as_str());
-        let text = if stitches {
-            let read = std::fs::read(path)
-                .map_err(anyhow::Error::from)
-                .and_then(|b| zigzag::formats::read::read_stitch_file(&b, &ext));
-            match read {
-                Ok(f) if f.blocks.is_empty() => {
-                    self.status = format!("{} has no stitches in it.", path.display());
-                    return;
-                }
-                Ok(f) => zigzag::formats::read::to_svg(&f),
-                Err(e) => {
-                    self.status = format!("Couldn't read {}: {e:#}", path.display());
-                    return;
-                }
-            }
-        } else {
-            match std::fs::read_to_string(path) {
-                Ok(t) => t,
-                Err(e) => {
-                    self.status = format!("Couldn't read {}: {e}", path.display());
-                    return;
-                }
+        if zigzag::formats::READABLE_FORMATS.contains(&ext.as_str()) {
+            self.place_stitches(path, &ext);
+            return;
+        }
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => {
+                self.status = format!("Couldn't read {}: {e}", path.display());
+                return;
             }
         };
         let mut added = Vec::new();
@@ -1591,9 +1577,7 @@ impl Studio {
             Ok(()) => {
                 self.set_selection(&added);
                 self.status = format!("Placed {} ({} objects).", path.display(), added.len());
-                // Stitch files keep their size: scaled, their stitches
-                // would be longer or shorter than they were made to be.
-                if !stitches && let Some(s) = self.fit_to_hoop(true) {
+                if let Some(s) = self.fit_to_hoop(true) {
                     self.status = format!(
                         "Placed {}. It was bigger than the hoop, so it's scaled to {:.0}%. Undo puts it back to full size.",
                         path.display(),
@@ -1602,6 +1586,38 @@ impl Studio {
                 }
             }
             Err(e) => self.status = format!("Couldn't place {}: {e:#}", path.display()),
+        }
+    }
+}
+
+impl Studio {
+    /// Place a machine file: its stitches come in as manual stitches at the
+    /// size they were digitized (scaled, they'd be longer or shorter than
+    /// they were made to be), in one group named after the file, selected.
+    fn place_stitches(&mut self, path: &Path, ext: &str) {
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.status = format!("Couldn't read {}: {e}", path.display());
+                return;
+            }
+        };
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let mut added = Vec::new();
+        match self.structural(|d| {
+            added =
+                d.place_stitch_file(&bytes, ext, &name, zigzag::document::Placement::default())?;
+            Ok(())
+        }) {
+            Ok(()) => {
+                self.set_selection(&added);
+                self.status = format!("Placed {} ({} objects).", path.display(), added.len());
+            }
+            // (Not a file of the kind its name says, or one with no stitches.)
+            Err(e) => self.status = format!("Couldn't read {}: {e:#}", path.display()),
         }
     }
 }
@@ -1794,13 +1810,13 @@ impl Studio {
             && !crate::tools::reads_stitches(tool)
             && !matches!(tool, "batch" | "trace_image" | "undo" | "redo")
             && !changes_tabs(tool, &call.args)
-            && self
-                .agent_tab()
-                .filter(|_| call.panel)
-                .is_none_or(|chat| {
-                    self.agent.follow.and_then(|rec| self.tab_of(rec)).unwrap_or(chat)
-                        == self.tabs.active
-                })
+            && self.agent_tab().filter(|_| call.panel).is_none_or(|chat| {
+                self.agent
+                    .follow
+                    .and_then(|rec| self.tab_of(rec))
+                    .unwrap_or(chat)
+                    == self.tabs.active
+            })
     }
 
     /// Send a waiting call's answer, with the design problems its edit
@@ -2756,7 +2772,7 @@ impl Studio {
                             ui.add_space(crate::theme::space::XS);
                             let n = self.layout.isolated.len();
                             let crumbs: Vec<String> = std::iter::once("Document".to_string())
-                                .chain(self.layout.isolated.iter().map(|g| Self::group_label(g)))
+                                .chain(self.layout.isolated.iter().map(|g| self.group_label(g)))
                                 .collect();
                             for (k, name) in crumbs.iter().enumerate() {
                                 if k > 0 {
@@ -3241,9 +3257,6 @@ impl Studio {
         if sewing.is_none() && self.plan_is_current() && self.drag.is_none() {
             self.draw_bridges(&painter, rect);
             self.route_handles(ui, &painter, rect);
-        } else {
-            self.route_drag = None;
-            self.route_active = None;
         }
         self.draw_isolation(&painter, rect);
         if self.view_tools.density {
@@ -3474,6 +3487,7 @@ pub(crate) fn give_settings(shape: &mut Shape, src: &Params) {
         start: own.start,
         end: own.end,
         trim: own.trim,
+        trim_before: own.trim_before,
         stop: own.stop,
         lock: own.lock,
         hide: own.hide,
@@ -3852,6 +3866,42 @@ mod tests {
         h.drop_at(away);
         h.run_steps(2);
         assert_eq!(h.state().route_active, None);
+        assert!(h.query_by_label("Thread route point 1").is_none());
+    }
+
+    #[test]
+    fn a_pending_plan_keeps_the_route_in_hand() {
+        let mut h = Harness::builder()
+            .with_size(Vec2::new(1400.0, 900.0))
+            .build_ui_state(
+                |ui, s: &mut Studio| s.frame(ui),
+                Studio::with_file(None, None),
+            );
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="80mm" height="30mm" viewBox="0 0 80 30">
+            <rect id="left" x="0" y="0" width="10" height="10" fill="#aa0000"/>
+            <rect id="right_via=0:20" x="60" y="0" width="10" height="10" fill="#aa0000"/>
+        </svg>"##;
+        h.state_mut()
+            .set_document(zigzag::document::Document::from_svg(svg, "route", None).unwrap());
+        h.state_mut().set_tool(Tool::Select);
+        h.run_steps(4);
+        let uid = h.state().doc.shapes[1].uid;
+        assert_eq!(h.state().design.routes.len(), 1);
+        let drag = RouteDrag {
+            uid,
+            k: 0,
+            insert: false,
+            at: P::new(0.0, 200.0),
+        };
+        let s = h.state_mut();
+        s.route_active = Some(uid);
+        s.route_drag = Some(drag);
+        // Hold the pending flag for a frame, independent of worker timing.
+        s.planner.pending = true;
+        h.run_steps(1);
+        assert!(!h.state().plan_is_current());
+        assert_eq!(h.state().route_active, Some(uid));
+        assert_eq!(h.state().route_drag, Some(drag));
         assert!(h.query_by_label("Thread route point 1").is_none());
     }
 
