@@ -341,7 +341,12 @@ impl Document {
     pub fn empty() -> Document {
         let mut d =
             Document::from_svg(EMPTY_SVG, "untitled", None).expect("built-in template parses");
-        d.offset = P::default();
+        // The hoop's center is the canvas's (0, 0), where the template's
+        // viewBox puts it, so what's added on the hoop is saved where other
+        // apps show it on the canvas too. (Not the px origin: that's the
+        // viewBox's corner.)
+        let ts = d.root_transform().expect("built-in template has a size");
+        d.offset = P::new((ts[4] * PX_TO_UNITS).round(), (ts[5] * PX_TO_UNITS).round());
         d
     }
 
@@ -1903,6 +1908,36 @@ mod tests {
         );
         assert!((b.center().x + 200.0).abs() < 1.0);
         assert!(d.to_svg().unwrap().contains("data-zigzag="));
+    }
+
+    #[test]
+    fn whats_added_on_the_hoop_is_saved_on_the_canvas() {
+        // A square in the middle of the hoop is in the middle of the saved
+        // canvas, as a browser or Illustrator draws it (it was saved round
+        // the canvas's top-left corner).
+        let mut d = Document::empty();
+        let sq = r##"<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" viewBox="0 0 10 10"><rect id="sq" width="10" height="10" fill="#f00"/></svg>"##;
+        let new = d.add_svg(sq, Placement::default()).unwrap();
+        let b = svg::shapes_bounds(&d.shapes[new[0]..=new[0]]);
+        assert!(
+            b.center().len() < 0.5,
+            "in the middle of the hoop: {:?}",
+            b.center()
+        );
+        let saved = d.to_svg().unwrap();
+        let tree = svg::parse_tree(saved.as_bytes()).unwrap();
+        let px = tree.root().abs_bounding_box().unwrap();
+        let (w, h) = (tree.size().width(), tree.size().height());
+        let mid = |a: f32, b: f32| (a + b) / 2.0;
+        assert!(
+            (mid(px.left(), px.right()) - w / 2.0).abs() < 0.5
+                && (mid(px.top(), px.bottom()) - h / 2.0).abs() < 0.5,
+            "in the middle of the {w}x{h} canvas: {px:?}\n{saved}"
+        );
+        // And it opens where it was.
+        let again = Document::from_svg(&saved, "t", None).unwrap();
+        let b2 = svg::shapes_bounds(&again.shapes);
+        assert!((b2.width() - b.width()).abs() < 0.5);
     }
 
     #[test]
