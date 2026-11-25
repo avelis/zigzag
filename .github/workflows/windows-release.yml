@@ -265,7 +265,9 @@ jobs:
             $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
             "$hash  $(Split-Path $file -Leaf)"
           }
-          $lines | Out-File -Encoding ascii $sums
+          # Unix line endings: with Windows ones, `shasum -c` on a Mac or
+          # Linux looks for a file whose name ends in a carriage return.
+          [IO.File]::WriteAllText((Join-Path $PWD $sums), (($lines -join "`n") + "`n"))
           Get-Content $sums
           "sums=$sums" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
