@@ -1810,13 +1810,13 @@ impl Studio {
             && !crate::tools::reads_stitches(tool)
             && !matches!(tool, "batch" | "trace_image" | "undo" | "redo")
             && !changes_tabs(tool, &call.args)
-            && self.agent_tab().filter(|_| call.panel).is_none_or(|chat| {
-                self.agent
-                    .follow
-                    .and_then(|rec| self.tab_of(rec))
-                    .unwrap_or(chat)
-                    == self.tabs.active
-            })
+            && self
+                .agent_tab()
+                .filter(|_| call.panel)
+                .is_none_or(|chat| {
+                    self.agent.follow.and_then(|rec| self.tab_of(rec)).unwrap_or(chat)
+                        == self.tabs.active
+                })
     }
 
     /// Send a waiting call's answer, with the design problems its edit
