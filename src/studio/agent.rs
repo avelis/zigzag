@@ -1255,6 +1255,7 @@ impl AgentState {
         std::thread::spawn(move || {
             let run = |args: &[&str]| {
                 let mut cmd = Command::new(&program);
+                crate::no_console(&mut cmd);
                 cmd.args(args).stdin(Stdio::null()).stderr(Stdio::null());
                 if let Some(p) = &path {
                     cmd.env("PATH", p);
@@ -1621,6 +1622,7 @@ impl AgentState {
         port: u16,
     ) -> Command {
         let mut cmd = Command::new(program);
+        crate::no_console(&mut cmd);
         match self.kind {
             AgentKind::Claude => {
                 let config = serde_json::json!({

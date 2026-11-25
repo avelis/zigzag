@@ -56,12 +56,16 @@ installs it when you say (ZigZag › Check for Updates…).
 ## Download for Windows
 
 **[Download ZigZag for Windows](https://github.com/simpsoka/zigzag/releases/latest)**
-— the `ZigZag-<version>-x86_64-windows.zip` asset on the latest release.
+— the `ZigZag-<version>-x86_64-windows-setup.exe` asset on the latest release.
 
-For 64-bit Windows 10 (version 1709 or later) and Windows 11. Unzip it and
-double-click **ZigZag.exe**. Windows SmartScreen warns on apps without a
-Microsoft-trusted signature the first time they run; click *More info* →
-*Run anyway*. No Rust installation is needed.
+For 64-bit Windows 10 (version 1709 or later) and Windows 11. Run the
+installer: it needs no administrator rights, adds ZigZag to the Start menu
+and to *Open with* for SVG and stitch files, and can put `zigzag-cli` on the
+PATH. Uninstall it from Settings › Apps. The
+`ZigZag-<version>-x86_64-windows.zip` asset holds the same files without an
+installer: unzip it and double-click **ZigZag.exe**. Windows SmartScreen may
+warn the first time a download runs; click *More info* → *Run anyway*. No
+Rust installation is needed.
 
 ## Download for Linux
 
@@ -77,6 +81,28 @@ inside the extracted folder. It also includes the `zigzag` CLI and
 [Release notes and checksums](https://github.com/simpsoka/zigzag/releases/latest)
 · [Changelog](CHANGELOG.md)
 · [Publishing a release](RELEASE.md)
+
+## Privacy
+
+ZigZag works without an account, sends no usage statistics or crash reports,
+and keeps your designs on your computer unless you share them. It asks GitHub
+whether there's a newer release (Settings › General turns that off) and talks
+to zigzag.diy only when you sign in, sync or share a design. The details are
+in the [privacy policy](https://zigzag.diy/privacy/).
+
+## Code signing policy
+
+- **Mac:** releases are signed with the maintainer's Apple Developer ID and
+  notarized by Apple.
+- **Windows:** the installer and the three executables are signed in the
+  maintainer's name, verified by Microsoft
+  ([Azure Artifact Signing](https://learn.microsoft.com/azure/artifact-signing/)).
+  Releases up to 0.1.11 were unsigned.
+
+Windows releases are built and signed on GitHub Actions from the tagged
+source ([windows-release.yml](.github/workflows/windows-release.yml)), and
+the run fails if any of those files comes out without a valid signature.
+Nothing built anywhere else is signed.
 
 ## Build
 
