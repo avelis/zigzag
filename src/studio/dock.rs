@@ -2517,7 +2517,7 @@ impl Studio {
                                     moving.extend(all_sel.iter().filter(|m| !members.contains(m)));
                                 }
                                 drag_start =
-                                    Some((moving, Studio::group_label(id), Some(id.clone())));
+                                    Some((moving, self.group_label(id), Some(id.clone())));
                             }
                             // Dragged over: above the group, or below it
                             // (at the top of it, while it's open).
@@ -2567,7 +2567,7 @@ impl Studio {
                                 &p,
                             );
                             let open = *is_open;
-                            let label = Studio::group_label(id);
+                            let label = self.group_label(id);
                             let all = members.iter().all(|m| all_sel.contains(m));
                             let some = members.iter().any(|m| all_sel.contains(m));
                             resp.widget_info(|| {
@@ -3160,7 +3160,7 @@ impl Studio {
                 if let Some(at) = self.doc.shapes.iter().position(|s| s.uid == uid) {
                     self.set_selection(&[at]);
                 }
-                self.names = zigzag::svg::display_names(&self.doc.shapes);
+                self.names = self.doc.object_names();
                 self.status = format!("Renamed to {name}.");
             }
             Err(e) => self.status = format!("Couldn't rename it: {e}."),
@@ -3354,7 +3354,7 @@ impl Studio {
                 // (The group, or the run of it that Layers lists as one.)
                 .find(|g| self.group_members(g) == sel || self.group_run(g, i) == sel)
             {
-                Some(g) => format!("{} · {count} objects", Studio::group_label(g)),
+                Some(g) => format!("{} · {count} objects", self.group_label(g)),
                 None => format!("{count} objects"),
             }
         } else {
@@ -5260,7 +5260,7 @@ mod tests {
             .with_size(Vec2::new(300.0, 400.0))
             .build_ui_state(
                 |ui, s: &mut Studio| {
-                    s.names = zigzag::svg::display_names(&s.doc.shapes);
+                    s.names = s.doc.object_names();
                     s.objects_body(ui)
                 },
                 s,

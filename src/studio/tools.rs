@@ -23,7 +23,7 @@ Groups are how the person selects and moves a part of the design as one thing (a
 An object is named for its id without the settings (id=\"Face_mask_fill\" is \"Face mask\"); name it to a tool by that name, by the id, or by its index. \
 list_machines and set_document's machine set a document up for a machine: its hoop, the file it reads, its shortest stitch and its lock stitches. \
 Hat designs are small (about 50 × 50 mm on the front of a cap): keep satin columns under 7 mm wide, letters at least 5 mm tall, and details at least 1.5 mm. \
-open_file also opens machine files (pes, pec, dst, exp, jef, vp3) as manual stitches. \
+open_file also opens machine files (pes, pec, dst, exp, jef, vp3) as manual stitches; place_file adds one to the open design instead, at its real size, as one group named after the file. \
 trace_image turns a logo (PNG, JPEG, WebP, GIF, BMP or TIFF) into shapes (snap colors to Brother or Janome threads with `threads`). simplify_design makes the whole design quicker to sew (fewer threads, no details too small to sew, fewer trims; try it with dry_run first to see what it comes to). add_outline gives a filled shape an outline (a running stitch, or satin) that is an object of its own, named \"<shape> (outline)\", with its own thread and stitch type. round_corners softens sharp corners, which stitch more cleanly; simplify takes extra points out of outlines (traced ones especially) and clean_up removes stray points, objects too small to sew and extra points across the design. \
 To make satin stitching cleaner: measure_stitching counts what shows (stitches outside the shape, bare cloth, crowded needle points, seams, piled satin, travel in sight, trims); change one thing (a letter's corners with set_object cut or mitred, its zigzag with even, its lean, underlay or pull; or break_into_columns and then move_object to reorder the columns and edit_path to move a rail's points or add, move or delete a rung, reading them first with get_path); measure again passing the first result's measures as `before`, keep the change if the verdict is better and undo it if it's worse; and look at render_preview, which sees what the numbers don't. Text is made shapes with create_outlines before its columns or points can be changed. Before breaking a shape into columns, duplicate it and set the copy's kind to skip, to pass as measure_stitching's `within` (the outline the columns are held to); delete the copy when done. \
 Use batch to make several changes in one call: it is all or nothing and one undo step, each step is {\"tool\": name, \"arguments\": {…}}, and later steps can use earlier results (\"$0.added.0.name\"). \
@@ -740,6 +740,22 @@ pub fn tool_specs() -> Value {
             "inputSchema": { "type": "object", "properties": { "format": { "type": "string", "enum": ["pes", "dst", "exp", "jef", "vp3", "pec", "pen", "html"] }, "path": { "type": "string", "description": "Absolute output path." }, "objects": { "type": "boolean", "description": "Also write PATH.objects.json beside a machine file: which object each stitch, jump and trim in it is for (the objects, and the runs of commands for each, numbered as the file has them), so a checker can name the shape behind a stitch. Not for pen or html. Default false." } }, "required": ["path"] }
         }),
         json!({
+            "name": "place_file",
+            "description": format!(
+                "Place a file in the open design (Illustrator's Place). A machine file ({}) comes in as manual-stitch objects at the size it was digitized (scaling would change its stitch lengths), one per run, in one group named after the file, on top of what's there (sewn last). Move it with transform_objects. An SVG is placed as add_svg places it, and an image is traced with default settings (trace_image has the options).",
+                zigzag::formats::READABLE_FORMATS.join(", ")
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Absolute path of the file." },
+                    "x_mm": { "type": "number", "description": "Center of what's placed, mm right of the hoop center. Default 0." },
+                    "y_mm": { "type": "number", "description": "Center of what's placed, mm below the hoop center. Default 0." }
+                },
+                "required": ["path"]
+            }
+        }),
+        json!({
             "name": "trace_image",
             "description": "Trace a raster logo (png, jpg, webp, gif, bmp, tiff) into stitchable shapes and add them (or start a new document with them). Flat logos trace exactly (edges, corners, circles); photos are posterized. Use `palette` to keep to the design's threads, and `threads` to snap the rest to a thread chart. The result says which colors are new_colors (each one more thread change) and how many trims the design had before and has after.",
             "inputSchema": {
@@ -1433,7 +1449,7 @@ impl Studio {
                 if zigzag::svg::name_words(&g).is_empty() {
                     g
                 } else {
-                    Studio::group_label(&g)
+                    self.group_label(&g)
                 }
             }),
             "kind": kind.name(),
@@ -1939,6 +1955,7 @@ impl Studio {
         let result = match name {
             "batch" => return self.tool_batch(args),
             "trace_image" => self.tool_trace_image(args),
+            "place_file" => self.tool_place_file(args),
             "round_corners" => self.tool_round_corners(args),
             "break_into_columns" => self.tool_break_into_columns(args),
             "create_outlines" => self.tool_create_outlines(args),
@@ -2292,7 +2309,7 @@ impl Studio {
             self.replan();
         } else if self.batching {
             // Later steps name objects as they are now (names are cheap).
-            self.names = zigzag::svg::display_names(&self.doc.shapes);
+            self.names = self.doc.object_names();
         }
         let result = result.unwrap_or_else(ToolResult::error);
         match before {
@@ -2551,6 +2568,47 @@ impl Studio {
         let mut out = ToolResult::json(&json!({ "results": report }));
         out.content.extend(images);
         out
+    }
+
+    fn tool_place_file(&mut self, args: &Value) -> Result<ToolResult, String> {
+        let path = match args.get("path").and_then(Value::as_str).map(PathBuf::from) {
+            Some(p) if p.is_absolute() => p,
+            _ => return Err("path must be absolute".into()),
+        };
+        let num = |k: &str| {
+            args.get(k)
+                .and_then(Value::as_f64)
+                .filter(|v| v.is_finite())
+        };
+        let place = Placement {
+            center_mm: Some((num("x_mm").unwrap_or(0.0), num("y_mm").unwrap_or(0.0))),
+            ..Placement::default()
+        };
+        let mut added = Vec::new();
+        self.structural(|d| {
+            added = d.place_file(&path, place)?;
+            Ok(())
+        })
+        .map_err(|e| format!("couldn't place {}: {e:#}", path.display()))?;
+        self.replan_soon();
+        self.fit_view();
+        let shapes: Vec<_> = added.iter().map(|&i| self.doc.shapes[i].clone()).collect();
+        let b = zigzag::svg::shapes_bounds(&shapes);
+        let (hw, hh) = self.hoop_dims();
+        let group = shapes
+            .first()
+            .and_then(|s| s.groups.first())
+            .map(|g| self.group_label(g));
+        let objs: Vec<Value> = added.iter().map(|&i| self.object_json(i)).collect();
+        Ok(ToolResult::json(&json!({
+            "added": objs,
+            "group": group,
+            "width_mm": b.width().round() / 10.0,
+            "height_mm": b.height().round() / 10.0,
+            "fits_hoop": b.width() <= hw * 10.0 + 0.5 && b.height() <= hh * 10.0 + 0.5,
+            "total_objects": self.doc.shapes.len(),
+            "design_problems": self.issues.iter().filter(|x| x.shape.is_none()).map(|x| issue_json(x, &self.names)).collect::<Vec<_>>(),
+        })))
     }
 
     fn tool_trace_image(&mut self, args: &Value) -> Result<ToolResult, String> {
@@ -3352,7 +3410,7 @@ impl Studio {
         if self.batching {
             self.dirty = true;
             // Names are cheap, and later steps refer to objects by them.
-            self.names = zigzag::svg::display_names(&self.doc.shapes);
+            self.names = self.doc.object_names();
         } else {
             self.replan();
         }
@@ -3912,7 +3970,7 @@ impl Studio {
             }
         }
         let is = |g: &&String| {
-            *g == name || Studio::group_label(g).eq_ignore_ascii_case(name.trim())
+            *g == name || self.group_label(g).eq_ignore_ascii_case(name.trim())
         };
         let found: Vec<&String> = ids.iter().filter(is).collect();
         match found.as_slice() {
@@ -3923,7 +3981,7 @@ impl Studio {
                     "none".to_string()
                 } else {
                     ids.iter()
-                        .map(|g| Studio::group_label(g))
+                        .map(|g| self.group_label(g))
                         .collect::<Vec<_>>()
                         .join(", ")
                 }
@@ -4000,7 +4058,7 @@ impl Studio {
         let members = self.group_members(&group);
         Ok(ToolResult::text(format!(
             "The group '{}' has {} objects: {}.",
-            Studio::group_label(&group),
+            self.group_label(&group),
             members.len(),
             members
                 .iter()
@@ -5910,6 +5968,68 @@ mod tests {
     fn ok(r: ToolResult) -> Value {
         assert!(!r.is_error, "tool failed: {}", text(&r));
         serde_json::from_str(&text(&r)).unwrap_or(Value::Null)
+    }
+
+    #[test]
+    fn place_file_adds_a_machine_file_as_one_group_named_for_it() {
+        use zigzag::design::{Block, Design, Run};
+        let run = |pts: &[(f64, f64)]| Run {
+            pts: pts.iter().map(|&(x, y)| P::new(x, y)).collect(),
+            trim_before: true,
+        };
+        let star = Design {
+            name: "star".into(),
+            blocks: vec![
+                Block {
+                    color: [255, 200, 0],
+                    runs: vec![run(&[(-100.0, 0.0), (0.0, -60.0), (100.0, 0.0)])],
+                },
+                Block {
+                    color: [20, 50, 190],
+                    runs: vec![run(&[(-100.0, 60.0), (100.0, 60.0)])],
+                },
+            ],
+            ..Design::default()
+        };
+        let dir = std::env::temp_dir().join(format!("zigzag-place-tool-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Red Cross Star.dst");
+        std::fs::write(&path, zigzag::formats::dst::write_dst(&star)).unwrap();
+
+        let mut s = Studio::with_file(None, None);
+        ok(s.run_tool("add_svg", &json!({ "svg": BADGE, "replace": true })));
+        let n = s.doc.shapes.len();
+        let undo = s.undo.len();
+        let r = ok(s.run_tool(
+            "place_file",
+            &json!({ "path": path.to_str().unwrap(), "x_mm": 10.0, "y_mm": 5.0 }),
+        ));
+        assert_eq!(r["added"].as_array().unwrap().len(), 2, "{r}");
+        assert_eq!(r["group"], "Red Cross Star", "the file's whole name: {r}");
+        assert_eq!(r["width_mm"], 20.0, "kept its size: {r}");
+        assert_eq!(r["height_mm"], 12.0, "{r}");
+        assert_eq!(r["fits_hoop"], true);
+        assert_eq!(s.doc.shapes.len(), n + 2, "what was there stays");
+        assert_eq!(s.undo.len(), undo + 1, "one undo step");
+        for o in r["added"].as_array().unwrap() {
+            assert_eq!(o["kind"], "manual", "{o}");
+        }
+        // A relative path or a missing file is an error that changes nothing.
+        assert!(
+            s.run_tool("place_file", &json!({ "path": "star.dst" }))
+                .is_error
+        );
+        assert!(
+            s.run_tool(
+                "place_file",
+                &json!({ "path": dir.join("missing.pes").to_str().unwrap() }),
+            )
+            .is_error
+        );
+        assert_eq!(s.doc.shapes.len(), n + 2);
+        s.run_tool("undo", &json!({}));
+        assert_eq!(s.doc.shapes.len(), n, "undo takes it out");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
