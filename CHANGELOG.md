@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.12 — 2026-11-25
 
 - A machine file placed with File › Place comes in as one group named
   after the file, with its whole name (words that are also stitch types
@@ -15,6 +15,18 @@
 - A group selected among other objects is one shape to the Shape Modes,
   results stay in the group their objects were in, and corners stay
   sharp.
+- Bundled lettering fonts work offline, including six single-line fonts
+  for running stitch; more fonts can be downloaded from the font menu.
+- Use artwork as a motif for patterned fills or repeated running stitch.
+- Print Worksheet includes a picture of each color stop, thread-chart
+  matches, adjustable production times and an optional client proof page.
+- Open Recent and Contact Support are available from the menus.
+- Trim Before can be set per object; manual routes survive saving and
+  reopening, and travel previews stay clear while transforming objects.
+- Windows downloads include an installer and Azure-signed executables.
+
+[Full release notes](packaging/releases/0.1.12.md)
+· [Downloads](https://github.com/simpsoka/zigzag/releases/tag/v0.1.12)
 
 ## 0.1.11 — 2026-11-23
 
