@@ -3521,6 +3521,22 @@ impl Studio {
                         )
                     });
                 }
+                motif_rows(fm, pr, true);
+            }
+            Kind::Motif => {
+                motif_rows(fm, pr, false);
+                if fm.advanced(pr.len.is_some()) {
+                    value_row(
+                        fm,
+                        "Length",
+                        &mut pr.len,
+                        f.run_len,
+                        1.0..=5.0,
+                        " mm",
+                        0.1,
+                        "Longest stitch along the motif",
+                    );
+                }
             }
             Kind::Satin => {
                 if filled {
@@ -4753,6 +4769,31 @@ mod tests {
         h.run_steps(3);
         assert_eq!(h.state().doc.shapes[0].params.overlap, None);
         assert!(h.query_by_label("Overlapping").is_none());
+    }
+
+    #[test]
+    fn a_motif_shows_in_the_stitch_panel_and_comes_off_again() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm" viewBox="0 0 100 100">
+              <rect id="tile_fill_motif=0:2+2:0+4:2+2:4+0:2" x="10" y="10" width="30" height="30" fill="#2a6ab0"/>
+            </svg>"##;
+        let doc = zigzag::document::Document::from_svg(svg, "t", None).unwrap();
+        let mut h = Harness::builder()
+            .with_size(Vec2::new(1400.0, 1000.0))
+            .build_ui_state(
+                |ui, s: &mut Studio| s.frame(ui),
+                Studio::with_file(None, None),
+            );
+        h.state_mut().set_document(doc);
+        h.run_steps(3);
+        h.state_mut().set_selection(&[0]);
+        h.run_steps(3);
+        for row in ["Pattern", "Tile", "Layout"] {
+            assert!(h.query_by_label(row).is_some(), "{row}");
+        }
+        h.get_by_label("Remove").click();
+        h.run_steps(3);
+        assert!(h.state().doc.shapes[0].params.motif.is_none());
+        assert!(h.query_by_label("Layout").is_none());
     }
 
     #[test]
@@ -6665,5 +6706,147 @@ mod tests {
         unsafe { std::env::remove_var("ZIGZAG_CLAUDE") };
         assert!(h.state().agent_showing(), "the conversation in view");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The motif's rows in the Stitch panel (see `zigzag::stitch::motif`): a
+/// picture of it tiled, its size, the distance between copies, the layout,
+/// and what won't sew as drawn. `pattern`: on a fill (a patterned fill),
+/// else a motif fill.
+fn motif_rows(fm: &mut Form, pr: &mut Params, pattern: bool) {
+    let label = if pattern { "Pattern" } else { "Motif" };
+    // (A plain fill says nothing of patterns unless asked: Advanced.)
+    if pattern && !fm.advanced(pr.motif.is_some()) {
+        return;
+    }
+    let Some(m) = design::shape_motif(pr) else {
+        fm.row(label, |ui, _| {
+            caption(
+                ui,
+                "None. Draw a small line, select it with this shape, and choose Object › Use as Motif.",
+            );
+        });
+        return;
+    };
+    let mut remove = false;
+    fm.row(label, |ui, _| {
+        // The motif tiled in a little window: what it'll look like.
+        let (r, _) = ui.allocate_exact_size(Vec2::new(120.0, 48.0), Sense::hover());
+        let p = ui.painter_at(r);
+        let pal = pal_ui(ui);
+        p.rect_stroke(r, 3.0, Stroke::new(1.0, pal.separator), egui::StrokeKind::Inside);
+        let k = r.height() as f64 / (m.h.max(m.w) * 2.0);
+        let s = Stroke::new(1.2, pal.text);
+        for j in -1..4 {
+            for i in -1..8 {
+                let o = m.layout.offset(m.w, m.h, i, j);
+                for l in &m.lines {
+                    let pts: Vec<Pos2> = l
+                        .iter()
+                        .map(|q| {
+                            r.left_top()
+                                + Vec2::new(((q.x + o.x) * k) as f32, ((q.y + o.y) * k) as f32)
+                                + Vec2::splat(4.0)
+                        })
+                        .collect();
+                    p.add(egui::Shape::line(pts, s));
+                }
+            }
+        }
+        if ui
+            .add(egui::Button::new("Remove").small())
+            .on_hover_text(if pattern {
+                "Back to a plain fill"
+            } else {
+                "Take the motif off (it stops sewing)"
+            })
+            .clicked()
+        {
+            remove = true;
+        }
+    });
+    if remove {
+        pr.motif = None;
+        pr.tile = None;
+        pr.layout = None;
+        return;
+    }
+    // Size: the motif's longer side, scaled with its tile.
+    let lines = pr.motif.clone().unwrap_or_default();
+    let (mut lo, mut hi) = ((f64::INFINITY, f64::INFINITY), (f64::NEG_INFINITY, f64::NEG_INFINITY));
+    for &(x, y) in lines.iter().flatten() {
+        lo = (lo.0.min(x), lo.1.min(y));
+        hi = (hi.0.max(x), hi.1.max(y));
+    }
+    let width = (hi.0 - lo.0).max(hi.1 - lo.1);
+    let mut size = Some(width);
+    let r = value_row(
+        fm,
+        "Size",
+        &mut size,
+        width,
+        1.0..=30.0,
+        " mm",
+        0.1,
+        "How big the motif is (its longer side)",
+    );
+    if r.changed()
+        && let Some(v) = size
+        && width > 1e-6
+        && (v - width).abs() > 1e-6
+    {
+        let k = v.max(0.5) / width;
+        let round = |v: f64| (v * 100.0).round() / 100.0;
+        pr.motif = Some(
+            lines
+                .iter()
+                .map(|l| {
+                    l.iter()
+                        .map(|&(x, y)| (round((x - lo.0) * k), round((y - lo.1) * k)))
+                        .collect()
+                })
+                .collect(),
+        );
+        pr.tile = pr.tile.map(|(w, h)| (round(w * k), round(h * k)));
+    }
+    fm.row("Tile", |ui, lid| {
+        let (mut w, mut h) = pr.tile.unwrap_or((m.w / 10.0, m.h / 10.0));
+        let a = ui
+            .add(crate::units::drag_mm(&mut w, 1.0..=50.0, 0.1))
+            .labelled_by(lid)
+            .on_hover_text("How far apart the copies are, across");
+        ui.label("×");
+        let b = ui
+            .add(crate::units::drag_mm(&mut h, 1.0..=50.0, 0.1))
+            .on_hover_text("How far apart the rows of copies are");
+        if a.changed() || b.changed() {
+            pr.tile = Some((w, h));
+        }
+        if pr.tile.is_some()
+            && ui
+                .add(egui::Button::new("Fit").small())
+                .on_hover_text("Copies touching: the tile the motif's own size")
+                .clicked()
+        {
+            pr.tile = None;
+        }
+    });
+    fm.row("Layout", |ui, _| {
+        let now = pr.layout.unwrap_or_default();
+        egui::ComboBox::from_id_salt("motif-layout")
+            .selected_text(now.label())
+            .show_ui(ui, |ui| {
+                for l in zigzag::stitch::motif::Layout::ALL {
+                    if ui.selectable_label(l == now, l.label()).clicked() {
+                        pr.layout = (l != Default::default()).then_some(l);
+                    }
+                }
+            });
+    });
+    for problem in zigzag::stitch::motif::problems(&m, pattern, pr.fill_angle().to_radians()) {
+        fm.row("", |ui, _| {
+            let warn = pal_ui(ui).warning;
+            callout(ui, warn, Icon::Warning, &problem)
+        });
     }
 }

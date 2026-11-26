@@ -15,7 +15,7 @@ use zigzag::svg::{Geometry, Part};
 pub const INSTRUCTIONS: &str = "ZigZag is a machine-embroidery editor showing live documents on a hoop, one per tab; the tools work on the one in front (list_documents, switch_document, new_document). \
 Coordinates are millimetres from the hoop center (+x right, +y down). The person watching sees every change, and each tool call is one undo step. \
 Typical flow: get_design → add_svg (any SVG artwork) and add_text (lettering) → transform_objects to size and place → set_object to choose stitch types → render_preview to look at the stitches (artwork: true shows the drawing itself; region or object zooms in on details) → review_design (cost to sew and clarity, with what to fix) → check_design. Changes that are the person's to decide (how it looks against what it costs to sew) go to them as offer_choices, a question they answer with a click → save, or export (machine file or html worksheet). \
-Where a tool takes `objects` as one name or a list, \"all\" is every object; set_object takes `objects` too, to change several the same way at once (delete_object takes a list). combine_shapes merges or cuts filled shapes (unite, minus_front, intersect, exclude), so overlapping shapes in one thread aren't sewn twice. get_design's `selected` is what the person has selected on the canvas: what they mean by \"this\". \
+Where a tool takes `objects` as one name or a list, \"all\" is every object; set_object takes `objects` too, to change several the same way at once (delete_object takes a list). combine_shapes is Illustrator's Pathfinder: it merges or cuts filled shapes (unite, minus_front, intersect, exclude, minus_back) or divides, trims, merges, crops or outlines them, so overlapping shapes aren't sewn twice or under one another. get_design's `selected` is what the person has selected on the canvas: what they mean by \"this\". \
 Stitch types: fill (tatami rows; areas wider than ~7 mm), satin (glossy zigzag columns 1–7 mm wide; works on strokes, and on narrow filled shapes like letters, bars and rings), run (thin running stitch for details), \
 contour (rows following the outline inward), blanket (E-stitch edge), applique (placement line, stop, tack-down, stop, satin cover) and manual (every path point is a needle point). \
 Settings can also be preset in SVG element ids, e.g. id=\"logo_fill_a=45\" or id=\"border_satin_w=2\". \
@@ -385,7 +385,7 @@ pub fn tool_specs() -> Value {
                 "required": ["svg"]
             }
         }),
-        json!({
+        with_motif_props(json!({
             "name": "set_object",
             "description": "Change how an object is stitched. Omitted fields stay as they are; pass null to reset a field to the fabric's default.",
             "inputSchema": {
@@ -394,7 +394,7 @@ pub fn tool_specs() -> Value {
                     "object": obj_schema(),
                     "objects": { "description": "In place of `object`: several objects to change the same way, in one undo step (a list of indexes or names, or \"all\").", "oneOf": [{ "type": "integer" }, { "type": "string" }, { "type": "array", "items": { "oneOf": [{ "type": "integer" }, { "type": "string" }] } }] },
                     "cell_mm": { "type": ["number", "null"], "description": "Cross stitch: the size of each X's cell (1 to 10)." },
-                    "kind": { "type": "string", "enum": ["fill", "satin", "run", "contour", "blanket", "applique", "meander", "ripple", "cross", "tartan", "manual", "skip"] },
+                    "kind": { "type": "string", "enum": ["fill", "satin", "run", "contour", "blanket", "applique", "meander", "ripple", "cross", "tartan", "motif", "manual", "skip"] },
                     "angle": { "type": ["number", "null"], "description": "Fill row direction in degrees (0 = horizontal, 90 = vertical)." },
                     "spacing_mm": { "type": ["number", "null"], "description": "Fill/contour row spacing, satin zigzag spacing, or blanket prong spacing." },
                     "length_mm": { "type": ["number", "null"], "description": "Max stitch length for fill and run." },
@@ -423,7 +423,7 @@ pub fn tool_specs() -> Value {
                     "locked": { "type": ["boolean", "null"], "description": "Lock the object: the person can't select or move it on the canvas (a background, so dragging over it selects what's on top). It sews as usual, and these tools still change it." }
                 }
             }
-        }),
+        })),
         json!({
             "name": "delete_object",
             "description": "Delete an object, or several (objects). A filled shape's outline (the object named \"<shape> (outline)\") goes with it; deleting the outline alone leaves the shape. Naming an outline that already went with its shape is fine: it's said so.",
@@ -470,12 +470,12 @@ pub fn tool_specs() -> Value {
         }),
         json!({
             "name": "combine_shapes",
-            "description": "Make one shape of several filled shapes (Pathfinder): unite (all of them, merged, so nothing is sewn twice where they overlap), minus_front (the one sewn first, less everything sewn after it: a hole or a notch), intersect (only where they all overlap) or exclude (where an odd number overlap). The result takes the first one's thread and stitch settings. Text must be made outlines first.",
+            "description": "Illustrator's Pathfinder on filled shapes (in sewing order, back to front). Shape modes make one shape that replaces them: unite (all of them merged, so nothing is sewn twice where they overlap), minus_front (the one sewn first, less everything sewn after it: a hole or a notch), intersect (only where they all overlap), exclude (where an odd number overlap), minus_back (the one sewn last, less everything sewn before it); the result takes the front one's thread and stitch settings (minus_front: the back one's). Pathfinders keep each shape's thread and settings and place in the order: divide (a shape of every part they cut each other into; lines among the objects cut them too, and stay), trim (each shape loses what's hidden under shapes sewn after it, so nothing is sewn under anything), merge (trim, then touching shapes in the same thread and stitch type become one), crop (the others keep only what's inside the one sewn last, which goes), outline (a running stitch along every edge, edges shared sewn once; the shapes go). divide and outline take one shape or more; the rest two or more. Text is made outlines first.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "objects": { "description": "Two or more filled shapes (indexes or names).", "type": "array", "items": { "oneOf": [{ "type": "integer" }, { "type": "string" }] } },
-                    "op": { "type": "string", "enum": ["unite", "minus_front", "intersect", "exclude"], "description": "Default unite." }
+                    "objects": { "description": "The shapes (indexes or names).", "type": "array", "items": { "oneOf": [{ "type": "integer" }, { "type": "string" }] } },
+                    "op": { "type": "string", "enum": ["unite", "minus_front", "intersect", "exclude", "minus_back", "divide", "trim", "merge", "crop", "outline"], "description": "Default unite." }
                 },
                 "required": ["objects"]
             }
@@ -736,7 +736,7 @@ pub fn tool_specs() -> Value {
         }),
         json!({
             "name": "export",
-            "description": "Write a machine file: pes (Brother, Baby Lock), dst (Tajima, most commercial machines), exp (Melco, Bernina), jef (Janome), vp3 (Husqvarna Viking, Pfaff), pec, or pen (raw Skitch stream). Or html: a printable production worksheet (picture, size, time, thread list with Brother/Janome names). Without a format, the one the path ends in (.dst), or else the one the document's machine reads.",
+            "description": "Write a machine file: pes (Brother, Baby Lock), dst (Tajima, most commercial machines), exp (Melco, Bernina), jef (Janome), vp3 (Husqvarna Viking, Pfaff), pec, or pen (raw Skitch stream). Or html: a printable production worksheet (picture, size, time, and each color stop with a picture of what it sews, its thread in the chosen chart, stitches, trims and time; a client proof page can be ticked on in the page). Without a format, the one the path ends in (.dst), or else the one the document's machine reads.",
             "inputSchema": { "type": "object", "properties": { "format": { "type": "string", "enum": ["pes", "dst", "exp", "jef", "vp3", "pec", "pen", "html"] }, "path": { "type": "string", "description": "Absolute output path." }, "objects": { "type": "boolean", "description": "Also write PATH.objects.json beside a machine file: which object each stitch, jump and trim in it is for (the objects, and the runs of commands for each, numbered as the file has them), so a checker can name the shape behind a stitch. Not for pen or html. Default false." } }, "required": ["path"] }
         }),
         json!({
@@ -1228,6 +1228,22 @@ fn rails_count(s: &zigzag::svg::Shape) -> usize {
     }
 }
 
+/// `set_object`'s motif settings, added to its schema (a `json!` that big
+/// runs out of macro recursion).
+fn with_motif_props(mut tool: Value) -> Value {
+    let extra = json!({
+        "motif": { "description": "A motif, drawn by you: a few open lines, repeated over the shape on a tile grid. On a fill it's a patterned fill (Program Split): the rows stay a solid fill and the needle also goes down wherever a row crosses a motif line, so the motif shows as a texture; lines running along the rows (the fill's angle) don't show. On kind motif, copies are sewn as rows of open running stitch, each copy's last point joined straight to the next copy's first, one tile to the right: draw it from its left edge to its right at the same height to chain cleanly (a wave, a zigzag, a loop). Give the lines in mm, [[[x, y], …], …], y down, laid out from their top-left corner; or SVG path data in mm (\"M0 2 C1 0 2 0 3 2\"); or the name of an object whose path becomes the motif (draw it first with add_svg, then delete it); null removes it. The result's motif_problems says what won't sew as drawn. Look at it with render_preview.", "oneOf": [{ "type": "array", "items": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "minItems": 2 }, "maxItems": 40 }, { "type": "string" }, { "type": "integer" }, { "type": "null" }] },
+        "tile_mm": { "type": ["array", "null"], "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "The motif's tile [width, height] in mm: how far apart its copies are (2 to 50). Null: the motif's own size, so copies touch." },
+        "layout": { "type": ["string", "null"], "enum": ["grid", "brick", "brickcol", "hex", "hexcol", null], "description": "How the motif's tiles are laid out: grid, brick (every other row shifted half a tile; the default), brickcol (columns shifted), hex or hexcol." },
+    });
+    if let (Some(props), Value::Object(extra)) =
+        (tool["inputSchema"]["properties"].as_object_mut(), extra)
+    {
+        props.extend(extra);
+    }
+    tool
+}
+
 fn mm(v: f64) -> f64 {
     (v * 100.0).round() / 100.0
 }
@@ -1416,7 +1432,30 @@ impl Studio {
                     ),
                 );
             }
+            Kind::Motif => {
+                settings.insert("length_mm".into(), json!(p.run_len(&f)));
+            }
             Kind::Skip | Kind::Manual => {}
+        }
+        if matches!(kind, Kind::Fill | Kind::Motif) && p.motif.is_some() {
+            settings.insert("motif".into(), json!(p.motif));
+            if let Some((w, h)) = p.tile {
+                settings.insert("tile_mm".into(), json!([w, h]));
+            }
+            settings.insert(
+                "layout".into(),
+                json!(p.layout.unwrap_or_default().name()),
+            );
+            let problems = zigzag::design::shape_motif(p)
+                .map(|m| {
+                    zigzag::stitch::motif::problems(
+                        &m,
+                        kind == Kind::Fill,
+                        p.fill_angle().to_radians(),
+                    )
+                })
+                .unwrap_or_else(|| vec!["The motif has no size.".to_string()]);
+            settings.insert("motif_problems".into(), json!(problems));
         }
         if kind != Kind::Skip {
             for (k, v) in [("start", p.start), ("end", p.end)] {
@@ -1536,6 +1575,71 @@ impl Studio {
             }
             _ => None,
         }
+    }
+
+    /// The drawing and the shapes for Use as Motif: of what's selected, the
+    /// lines (or, with none, the smallest filled shape) are the motif and
+    /// the filled shapes left are what it's used on.
+    pub(crate) fn motif_pair(&self) -> Option<(usize, Vec<usize>)> {
+        let sel = self.sel_indices();
+        if sel.len() < 2 || sel.iter().any(|&i| self.doc.lettering(i).is_some()) {
+            return None;
+        }
+        let stroke = |i: usize| matches!(self.doc.shapes[i].geometry, Geometry::Stroke { .. });
+        let lines: Vec<usize> = sel.iter().copied().filter(|&i| stroke(i)).collect();
+        let source = match lines.as_slice() {
+            [one] => *one,
+            [] => *sel.iter().min_by(|&&a, &&b| {
+                let area = |i: usize| {
+                    let b = shape_bounds(&self.doc.shapes[i]);
+                    b.width() * b.height()
+                };
+                area(a).total_cmp(&area(b))
+            })?,
+            _ => return None,
+        };
+        let targets: Vec<usize> = sel
+            .iter()
+            .copied()
+            .filter(|&i| i != source && !stroke(i))
+            .collect();
+        (!targets.is_empty()).then_some((source, targets))
+    }
+
+    /// Object › Use as Motif: the selected drawing becomes the motif of the
+    /// selected shapes (a patterned fill on a fill, else a motif fill), and
+    /// goes. One undo step.
+    pub(crate) fn use_as_motif(&mut self) {
+        let Some((source, targets)) = self.motif_pair() else {
+            self.status = "Select a small drawing (a line) and the shapes to fill with it.".into();
+            return;
+        };
+        let uids: Vec<usize> = targets.iter().map(|&i| self.doc.shapes[i].uid).collect();
+        let mut steps: Vec<Value> = targets
+            .iter()
+            .map(|&t| {
+                let mut a = json!({ "object": t, "motif": source });
+                if !matches!(
+                    self.doc.shapes[t].params.kind.unwrap_or(Kind::Fill),
+                    Kind::Fill | Kind::Motif
+                ) {
+                    a["kind"] = json!("motif");
+                }
+                json!({ "tool": "set_object", "arguments": a })
+            })
+            .collect();
+        steps.push(json!({ "tool": "delete_object", "arguments": { "object": source } }));
+        let r = self.run_tool("batch", &json!({ "terse": true, "steps": steps }));
+        if r.is_error {
+            self.status = format!("Couldn't use it as a motif: {}", text_of(&r));
+            return;
+        }
+        let now: Vec<usize> = uids
+            .iter()
+            .filter_map(|u| self.doc.shapes.iter().position(|s| s.uid == *u))
+            .collect();
+        self.set_selection(&now);
+        self.status = "The drawing is the motif now: set its size and layout in the Stitch panel.".into();
     }
 
     /// Object › Route Thread Along Path: the selected line becomes the way
@@ -3584,7 +3688,7 @@ impl Studio {
         };
         if let Some(k) = args.get("kind") {
             let k = k.as_str().and_then(Kind::parse).ok_or(
-                "`kind` must be fill, satin, run, contour, blanket, applique, meander, ripple, cross, tartan, manual or skip",
+                "`kind` must be fill, satin, run, contour, blanket, applique, meander, ripple, cross, tartan, motif, manual or skip",
             )?;
             if !allowed.contains(&k) {
                 return Err(format!(
@@ -3728,6 +3832,125 @@ impl Studio {
             }
             Some(_) => {
                 return Err("route_mm must be up to 40 points [[x, y], …], [] or null".into());
+            }
+        }
+        match args.get("motif") {
+            None => {}
+            Some(Value::Null) => p.motif = None,
+            Some(Value::Array(a)) => {
+                let lines: Option<Vec<Vec<(f64, f64)>>> = a
+                    .iter()
+                    .map(|l| {
+                        l.as_array()?
+                            .iter()
+                            .map(|q| {
+                                let q = q.as_array().filter(|q| q.len() == 2)?;
+                                let n = |v: &Value| v.as_f64().filter(|x| x.abs() <= 100.0);
+                                // (To a hundredth of a millimetre: it's kept in the name.)
+                                Some((
+                                    (n(&q[0])? * 100.0).round() / 100.0,
+                                    (n(&q[1])? * 100.0).round() / 100.0,
+                                ))
+                            })
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .collect();
+                let lines = lines
+                    .filter(|ls| ls.iter().all(|l| l.len() >= 2) && !ls.is_empty())
+                    .ok_or("motif must be lines [[[x, y], …], …] in mm (each of 2 points or more, within 100 mm), an object's name, or null")?;
+                if lines.iter().map(Vec::len).sum::<usize>() > 400 {
+                    return Err("motif has more than 400 points: draw it simpler".into());
+                }
+                p.motif = Some(lines);
+            }
+            Some(v) => {
+                // SVG path data in mm ("M0 4 C1 2 …"), as agents tend to
+                // draw: its lines, as an object's would be read; else the
+                // name of an object whose path is the motif.
+                let d = v.as_str().map(str::trim).filter(|d| {
+                    d.starts_with(['M', 'm'])
+                        && d[1..].trim_start().starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '.')
+                });
+                let (mut lines, what) = match d {
+                    Some(d) => {
+                        let path = zigzag::bezier::from_svg_d(d);
+                        let lines: Vec<(zigzag::geom::Polyline, bool)> = path
+                            .iter()
+                            .map(|sp| {
+                                let mut l: Vec<P> = Vec::new();
+                                for (a, b) in sp.segments() {
+                                    let pts = zigzag::bezier::sample(&sp.cubic(a, b), 12);
+                                    let skip = usize::from(!l.is_empty());
+                                    l.extend(pts.into_iter().skip(skip).map(|q| P::new(q.x * 10.0, q.y * 10.0)));
+                                }
+                                (l, false)
+                            })
+                            .filter(|(l, _)| l.len() >= 2)
+                            .collect();
+                        if lines.is_empty() {
+                            return Err("motif path data draws no lines".into());
+                        }
+                        let g = zigzag::svg::Geometry::Stroke { lines, width: 0.0 };
+                        (zigzag::design::motif_lines(&g), "The motif path".to_string())
+                    }
+                    None => {
+                        let j = self.resolve(Some(v))?;
+                        if j == i {
+                            return Err("an object can't be its own motif".into());
+                        }
+                        (
+                            zigzag::design::motif_lines(&self.doc.shapes[j].geometry),
+                            self.names[j].clone(),
+                        )
+                    }
+                };
+                // A curve comes flattened into many points: no more than
+                // say its shape, and no more than a name holds.
+                let mut tol = 0.03;
+                while lines.iter().map(Vec::len).sum::<usize>() > 160 && tol < 5.0 {
+                    tol *= 1.6;
+                    lines = lines
+                        .iter()
+                        .map(|l| {
+                            let pts: Vec<P> = l.iter().map(|&(x, y)| P::new(x, y)).collect();
+                            simplified(&pts, tol)
+                                .iter()
+                                .map(|q| (q.x, q.y))
+                                .collect::<Vec<_>>()
+                        })
+                        .collect();
+                }
+                if lines.is_empty() {
+                    return Err(format!("{what} has no lines to make a motif of"));
+                }
+                if lines.iter().map(Vec::len).sum::<usize>() > 400 {
+                    return Err(format!("{what} has more than 400 points: simplify it first"));
+                }
+                p.motif = Some(lines);
+            }
+        }
+        match args.get("tile_mm") {
+            None => {}
+            Some(Value::Null) => p.tile = None,
+            Some(v) => {
+                let wh = v
+                    .as_array()
+                    .filter(|a| a.len() == 2)
+                    .and_then(|a| Some((a[0].as_f64()?, a[1].as_f64()?)))
+                    .filter(|(w, h)| w.is_finite() && h.is_finite())
+                    .ok_or("tile_mm must be [width, height] in mm, or null")?;
+                p.tile = Some((wh.0.clamp(2.0, 50.0), wh.1.clamp(2.0, 50.0)));
+            }
+        }
+        match args.get("layout") {
+            None => {}
+            Some(Value::Null) => p.layout = None,
+            Some(v) => {
+                p.layout = Some(
+                    v.as_str()
+                        .and_then(zigzag::stitch::motif::Layout::parse)
+                        .ok_or("layout must be grid, brick, brickcol, hex or hexcol")?,
+                )
             }
         }
         if let Some(v) = flag("spiral")? {
@@ -3932,30 +4155,33 @@ impl Studio {
         })))
     }
 
-    /// `combine_shapes`: one shape of several (the Pathfinder).
+    /// `combine_shapes`: the Pathfinder.
     fn tool_combine(&mut self, args: &Value) -> Result<ToolResult, String> {
+        use zigzag::document::Pathfinder;
         let idx = self.resolve_many(args.get("objects"))?;
-        if idx.len() < 2 {
-            return Err("combine_shapes takes two or more shapes".into());
-        }
         let op = match args.get("op").and_then(Value::as_str) {
-            None | Some("unite") => zigzag::boolean::PathOp::Unite,
-            Some("minus_front") => zigzag::boolean::PathOp::MinusFront,
-            Some("intersect") => zigzag::boolean::PathOp::Intersect,
-            Some("exclude") => zigzag::boolean::PathOp::Exclude,
-            _ => return Err("op must be unite, minus_front, intersect or exclude".into()),
+            None => Pathfinder::Unite,
+            Some(id) => Pathfinder::by_id(id).ok_or(
+                "op must be unite, minus_front, intersect, exclude, minus_back, divide, trim, merge, crop or outline",
+            )?,
         };
-        let mut new = 0;
+        if idx.len() < op.min_objects() {
+            return Err(format!("{} takes two or more shapes", op.id()));
+        }
+        let operands: Vec<Vec<usize>> = idx.iter().map(|&i| vec![i]).collect();
+        let mut made = Vec::new();
         self.structural(|d| {
-            new = d.pathfinder(&idx, op)?;
+            made = d.run_pathfinder(&operands, op)?;
             Ok(())
         })
         .map_err(|e| format!("{e:#}"))?;
         self.replan_soon();
-        self.set_selection(&[new]);
-        Ok(ToolResult::json(
-            &json!({ "added": [self.object_json(new)] }),
-        ))
+        self.set_selection(&made);
+        let objects: Vec<Value> = made.iter().map(|&i| self.object_json(i)).collect();
+        Ok(ToolResult::json(&match op.shape_op() {
+            Some(_) => json!({ "added": objects }),
+            None => json!({ "result": objects }),
+        }))
     }
 
     /// The id of the group called `name` (its name as it's shown, or its
@@ -6554,6 +6780,72 @@ mod tests {
         s.clear_routes();
         assert!(s.doc.shapes[at(&s, "right")].params.via.is_none());
         assert_eq!(s.design.trim_count(), trims);
+    }
+
+    #[test]
+    fn a_motif_drawn_by_hand_or_by_an_agent_is_kept_and_sewn() {
+        let mut s = Studio::with_file(None, None);
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="40mm" height="40mm" viewBox="0 0 40 40">
+            <rect id="leaf" x="5" y="5" width="30" height="30" fill="#2a7a2a"/>
+            <path id="wave" d="M0 0 L2 3 L4 0" stroke="#000" stroke-width="0.3" fill="none"/></svg>"##;
+        ok(s.run_tool("add_svg", &json!({ "svg": svg, "replace": true })));
+        let at = |s: &Studio, n: &str| s.names.iter().position(|x| x == n).unwrap();
+        let plain = s.design.stitch_count();
+        // By hand: the line and the shape selected, Use as Motif.
+        let (wave, leaf) = (at(&s, "wave"), at(&s, "leaf"));
+        s.set_selection(&[wave, leaf]);
+        assert_eq!(s.motif_pair(), Some((wave, vec![leaf])));
+        let undo = s.undo.len();
+        s.use_as_motif();
+        assert!(!s.names.iter().any(|n| n == "wave"), "the line is used up");
+        assert_eq!(s.undo.len(), undo + 1, "one step");
+        let leaf = at(&s, "leaf");
+        let p = &s.doc.shapes[leaf].params;
+        assert_eq!(p.motif, Some(vec![vec![(0.0, 0.0), (2.0, 3.0), (4.0, 0.0)]]));
+        assert_eq!(p.kind.unwrap_or(Kind::Fill), Kind::Fill, "a patterned fill");
+        assert_ne!(s.design.stitch_count(), plain);
+        // Kept in the file, and read back from it.
+        let saved = s.doc.to_svg().unwrap();
+        assert!(saved.contains("motif=0:0+2:3+4:0"), "{saved}");
+        let back = zigzag::svg::load(saved.as_bytes()).unwrap();
+        assert!(back.iter().any(|b| b.params.motif == s.doc.shapes[leaf].params.motif));
+        // By an agent: a motif fill of its own lines, tiled and laid out.
+        let r = ok(s.run_tool(
+            "set_object",
+            &json!({ "object": "leaf", "kind": "motif",
+                     "motif": [[[0, 0], [1.5, -2], [3, 0]]], "tile_mm": [3, 2.5], "layout": "grid" }),
+        ));
+        assert_eq!(r["settings"]["layout"], "grid");
+        assert_eq!(r["settings"]["tile_mm"], json!([3.0, 2.5]));
+        assert_eq!(r["settings"]["motif_problems"], json!([]), "{r}");
+        let open = s.design.stitch_count();
+        assert!(open > 50 && open * 3 < plain, "{open} vs {plain}");
+        // A line along the rows of a fill won't show: said.
+        let r = ok(s.run_tool(
+            "set_object",
+            &json!({ "object": "leaf", "kind": "fill", "motif": [[[0, 0], [4, 0]]], "tile_mm": [4, 2] }),
+        ));
+        assert!(
+            r["settings"]["motif_problems"][0].as_str().unwrap().contains("along the fill's rows"),
+            "{r}"
+        );
+        // As SVG path data in mm, as agents tend to write it: its lines,
+        // curves flattened, from their top-left corner.
+        let r = ok(s.run_tool(
+            "set_object",
+            &json!({ "object": "leaf", "kind": "motif",
+                     "motif": "M4 4 C1.7 2.7 2.6 1.5 4 1.5 C5.4 1.5 6.3 2.7 4 4", "tile_mm": [8, 8] }),
+        ));
+        let m = s.doc.shapes[at(&s, "leaf")].params.motif.clone().unwrap();
+        assert_eq!(m.len(), 1, "{r}");
+        assert!(m[0].len() > 4, "curves flattened: {m:?}");
+        let (x0, y0) = m[0].iter().fold((f64::MAX, f64::MAX), |a, q| (a.0.min(q.0), a.1.min(q.1)));
+        assert!(x0.abs() < 0.01 && y0.abs() < 0.01, "from its top-left: {m:?}");
+        // (Not taken for an object's name.)
+        assert!(s.run_tool("set_object", &json!({ "object": "leaf", "motif": "M1 1" })).is_error);
+        ok(s.run_tool("set_object", &json!({ "object": "leaf", "motif": null })));
+        assert!(s.doc.shapes[at(&s, "leaf")].params.motif.is_none());
+        assert!(s.run_tool("set_object", &json!({ "object": "leaf", "motif": [[[0, 0]]] })).is_error);
     }
 
     #[test]

@@ -5,7 +5,7 @@ use crate::app::{History, Studio, Tool};
 use crate::dock::PanelId;
 use crate::shapes::ShapeKind;
 use eframe::egui::{self, Key, KeyboardShortcut, Modifiers};
-use zigzag::boolean::PathOp;
+use zigzag::document::Pathfinder;
 use zigzag::geom::{rotate_about, scale_about, translation};
 use zigzag::params::Kind;
 
@@ -13,10 +13,16 @@ use zigzag::params::Kind;
 pub enum Action {
     /// Object › Route Thread Along Path, Edit Thread Route, Clear Thread Route.
     RouteThread,
+    /// Object › Use as Motif.
+    UseAsMotif,
     EditRoute,
     ClearRoute,
     New,
     Open,
+    /// File › Open Recent: the file at this place in the list (see
+    /// `recent.rs`), and Clear Menu at its foot.
+    OpenRecent(usize),
+    ClearRecent,
     /// File › Close: the tab in front (asks first if it has unsaved changes).
     CloseTab,
     NextTab,
@@ -25,6 +31,9 @@ pub enum Action {
     Save,
     SaveAs,
     Export(&'static str),
+    /// File › Print Worksheet: the worksheet opened in the browser, which
+    /// prints it or saves it as a PDF.
+    PrintWorksheet,
     /// File › Share…: a page for the design at zigzag.diy.
     Share,
     SendToSkitch,
@@ -71,7 +80,9 @@ pub enum Action {
     TransformAgain,
     /// Object › Rotate…: the Rotate tool's window, for an exact angle.
     RotateDialog,
-    Pathfinder(zigzag::boolean::PathOp),
+    Pathfinder(zigzag::document::Pathfinder),
+    /// Object › Pathfinder › Repeat: the last Pathfinder operation again.
+    RepeatPathfinder,
     OffsetPath,
     OutlineStroke,
     /// Object › Path › Add Outline: a stroke along a filled shape's edge,
@@ -131,6 +142,9 @@ pub enum Action {
     CheckForUpdates,
     /// Help › Report an Issue…: a new issue on GitHub, in the browser.
     ReportIssue,
+    /// Help › Contact Support…: a message to ZigZag's people, by way of
+    /// zigzag.diy (see `support.rs`).
+    ContactSupport,
     /// Help › ZigZag on GitHub: its page there, in the browser.
     GitHub,
     /// Help › Show Crash Logs: the folder they're kept in.
@@ -203,9 +217,17 @@ pub enum Entry {
     Item(Action, &'static str, Option<Sc>),
     Sep,
     Sub(&'static str, Vec<Entry>),
+    /// File › Open Recent: a submenu of the files in `Studio::recent`,
+    /// filled in when it's shown (its labels aren't known here).
+    Recent,
 }
 
+/// The Open Recent submenu's title, and the item that empties it.
+pub const RECENT_TITLE: &str = "Open Recent";
+pub const CLEAR_RECENT: &str = "Clear Menu";
+
 use Entry::{Item, Sep, Sub};
+use Entry::Recent as RecentMenu;
 
 pub fn menus() -> Vec<(&'static str, Vec<Entry>)> {
     let mut export: Vec<Entry> = zigzag::formats::MACHINE_FORMATS
@@ -229,6 +251,7 @@ pub fn menus() -> Vec<(&'static str, Vec<Entry>)> {
         Item(Action::Kind(Kind::Ripple), "Ripple Fill", None),
         Item(Action::Kind(Kind::Cross), "Cross-Stitch", None),
         Item(Action::Kind(Kind::Tartan), "Tartan", None),
+        Item(Action::Kind(Kind::Motif), "Motif Fill", None),
         Item(Action::Kind(Kind::Manual), "Manual Stitches", None),
         Sep,
         Item(Action::Kind(Kind::Skip), "Don't Stitch", plain(Key::X)),
@@ -239,6 +262,7 @@ pub fn menus() -> Vec<(&'static str, Vec<Entry>)> {
             vec![
                 Item(Action::New, "New", cmd(Key::N)),
                 Item(Action::Open, "Open…", cmd(Key::O)),
+                RecentMenu,
                 Item(Action::Place, "Place…", cmd_shift(Key::P)),
                 Sep,
                 Item(Action::CloseTab, "Close", cmd(Key::W)),
@@ -247,6 +271,7 @@ pub fn menus() -> Vec<(&'static str, Vec<Entry>)> {
                 Sep,
                 Item(Action::Share, "Share…", None),
                 Sub("Export", export),
+                Item(Action::PrintWorksheet, "Print Worksheet…", cmd(Key::P)),
                 Item(Action::SendToSkitch, "Send to Skitch…", None),
             ]
             .into_iter()
@@ -307,6 +332,7 @@ pub fn menus() -> Vec<(&'static str, Vec<Entry>)> {
                 Item(Action::ShowAll, "Show All", None),
                 Sep,
                 Item(Action::BreakIntoColumns, "Break into Columns", None),
+                Item(Action::UseAsMotif, "Use as Motif", None),
                 Sub(
                     "Path",
                     vec![
@@ -324,12 +350,24 @@ pub fn menus() -> Vec<(&'static str, Vec<Entry>)> {
                 ),
                 Sub(
                     "Pathfinder",
-                    vec![
-                        Item(Action::Pathfinder(PathOp::Unite), "Unite", None),
-                        Item(Action::Pathfinder(PathOp::MinusFront), "Minus Front", None),
-                        Item(Action::Pathfinder(PathOp::Intersect), "Intersect", None),
-                        Item(Action::Pathfinder(PathOp::Exclude), "Exclude", None),
-                    ],
+                    Pathfinder::SHAPE_MODES
+                        .iter()
+                        .map(|&op| Item(Action::Pathfinder(op), op.label(), None))
+                        .chain([Sep])
+                        .chain(
+                            Pathfinder::PATHFINDERS
+                                .iter()
+                                .map(|&op| Item(Action::Pathfinder(op), op.label(), None)),
+                        )
+                        .chain([
+                            Sep,
+                            Item(
+                                Action::RepeatPathfinder,
+                                "Repeat Pathfinder",
+                                cmd(Key::Num4),
+                            ),
+                        ])
+                        .collect(),
                 ),
                 Sep,
                 Item(Action::Group, "Group", cmd(Key::G)),
@@ -481,6 +519,7 @@ pub fn menus() -> Vec<(&'static str, Vec<Entry>)> {
                 help.extend([
                     Item(Action::GitHub, "ZigZag on GitHub", None),
                     Item(Action::ReportIssue, "Report an Issue…", None),
+                    Item(Action::ContactSupport, "Contact Support…", None),
                     Item(Action::CrashLogs, "Show Crash Logs", None),
                 ]);
                 // (On a Mac, About is in the ZigZag menu too.)
@@ -542,7 +581,7 @@ fn walk(entries: &[Entry], out: &mut Vec<(Action, &'static str, Option<Sc>)>) {
         match e {
             Item(a, l, s) => out.push((*a, *l, *s)),
             Sub(_, v) => walk(v, out),
-            Sep => {}
+            Sep | RecentMenu => {}
         }
     }
 }
@@ -623,6 +662,8 @@ impl Studio {
             Action::Lock | Action::Hide => has_sel,
             Action::UnlockAll => self.doc.shapes.iter().any(|s| s.params.locked()),
             Action::ShowAll => self.doc.shapes.iter().any(|s| s.params.hidden()),
+            Action::OpenRecent(i) => i < self.recent.files().len(),
+            Action::ClearRecent => !self.recent.files().is_empty(),
             Action::Undo => !self.undo.is_empty(),
             Action::Redo => !self.redo.is_empty(),
             Action::Copy | Action::Duplicate | Action::Delete | Action::Deselect => has_sel,
@@ -646,6 +687,7 @@ impl Studio {
                         == 1
             }
             Action::RouteThread => self.route_pair().is_some(),
+            Action::UseAsMotif => self.motif_pair().is_some(),
             Action::EditRoute | Action::ClearRoute => self
                 .sel_indices()
                 .iter()
@@ -656,7 +698,7 @@ impl Studio {
             | Action::FitToHoop
             | Action::CleanUp
             | Action::SimplifyDesign => !self.doc.shapes.is_empty(),
-            Action::Export(_) | Action::PlayPause => has_design,
+            Action::Export(_) | Action::PrintWorksheet | Action::PlayPause => has_design,
             Action::Share => !self.doc.shapes.is_empty(),
             // (Only for a machine ZigZag sends to.)
             Action::SendToSkitch => has_design && self.sends_direct(),
@@ -678,7 +720,11 @@ impl Studio {
             | Action::BringForward
             | Action::SendBackward
             | Action::SendToBack => has_sel,
-            Action::Pathfinder(_) => self.subjects().len() >= 2,
+            Action::Pathfinder(op) => self.pathfinder_ready(op),
+            Action::RepeatPathfinder => self
+                .layout
+                .last_pathfinder
+                .is_some_and(|op| self.pathfinder_ready(op)),
             // (A shape and its own outline are one thing: not a group.)
             Action::Group => self.subjects().len() >= 2,
             Action::Ungroup => has_sel && self.any_grouped(&self.sel_indices()),
@@ -770,6 +816,19 @@ impl Studio {
                     .filter("Machine files", &zigzag::formats::READABLE_FORMATS);
                 self.file_dialog(req, crate::file_dialog::Then::Open);
             }
+            Action::OpenRecent(i) => {
+                let Some(path) = self.recent.files().get(i).cloned() else {
+                    return;
+                };
+                if path.exists() {
+                    self.load(&path);
+                } else {
+                    // Moved or deleted since: not offered again.
+                    self.recent.forget(&path);
+                    self.status = format!("{} isn't there any more.", path.display());
+                }
+            }
+            Action::ClearRecent => self.recent.clear(),
             Action::Place => {
                 let mut exts = vec!["svg"];
                 exts.extend(zigzag::trace::IMAGE_FORMATS);
@@ -790,6 +849,7 @@ impl Studio {
             }
             Action::SaveAs => self.save_as_dialog(),
             Action::Export(ext) => self.export_dialog(ext),
+            Action::PrintWorksheet => self.print_worksheet(),
             Action::Share => self.open_share(),
             Action::SendToSkitch => self.send_action(),
             Action::Undo => self.pending_history = Some(History::Undo),
@@ -834,6 +894,7 @@ impl Studio {
             Action::SendBackward => self.move_selected(-1),
             Action::GroupColors => self.group_colors(),
             Action::RouteThread => self.route_along_selected(),
+            Action::UseAsMotif => self.use_as_motif(),
             Action::EditRoute => self.edit_route_as_path(),
             Action::ClearRoute => self.clear_routes(),
             Action::AddText => self.open_text_window(),
@@ -858,6 +919,11 @@ impl Studio {
             Action::AskAgent => self.ask_agent(),
             Action::ShowIssues => self.open_issues = true,
             Action::Pathfinder(op) => self.pathfinder_selected(op),
+            Action::RepeatPathfinder => {
+                if let Some(op) = self.layout.last_pathfinder {
+                    self.pathfinder_selected(op);
+                }
+            }
             Action::OffsetPath => self.layout.offset_dialog = Some(1.0),
             Action::OutlineStroke => self.outline_stroke_selected(),
             Action::AddOutline => self.add_outline_selected(),
@@ -900,6 +966,7 @@ impl Studio {
             }
             Action::Settings => self.open_settings(self.settings_ui.section),
             Action::ReportIssue => crate::sew::open_url(&issue_url()),
+            Action::ContactSupport => self.open_support(),
             Action::GitHub => crate::sew::open_url(crate::about::GITHUB_URL),
             Action::CrashLogs => self.show_crash_logs(),
             Action::About => self.about = true,
@@ -1156,6 +1223,29 @@ impl Studio {
                         self.menu_entries(ui, ctx, v)
                     });
                 }
+                RecentMenu => {
+                    ui.menu_button(row(false, RECENT_TITLE), |ui| {
+                        ui.set_min_width(220.0);
+                        for (i, label) in self.recent.labels().into_iter().enumerate() {
+                            let full = self.recent.files()[i].display().to_string();
+                            if ui.button(label).on_hover_text(full).clicked() {
+                                self.run_action(Action::OpenRecent(i));
+                                ui.close();
+                            }
+                        }
+                        if !self.recent.files().is_empty() {
+                            ui.separator();
+                        }
+                        let clear = egui::Button::new(CLEAR_RECENT);
+                        if ui
+                            .add_enabled(self.action_enabled(Action::ClearRecent), clear)
+                            .clicked()
+                        {
+                            self.run_action(Action::ClearRecent);
+                            ui.close();
+                        }
+                    });
+                }
                 Item(a, label, sc) => {
                     // The check is drawn, not typed: the fallback UI fonts
                     // (Arial on Windows) have no ✓ and show a box instead.
@@ -1228,11 +1318,56 @@ mod tests {
     }
 
     #[test]
+    fn open_recent_lists_what_was_opened_and_opens_it_again() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::temp_dir().join(format!("zigzag-open-recent-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let svg = |name: &str| {
+            let f = dir.join(name);
+            std::fs::write(
+                &f,
+                r##"<svg xmlns="http://www.w3.org/2000/svg" width="40mm" height="40mm" viewBox="0 0 40 40"><rect x="5" y="5" width="30" height="30" fill="#c33"/></svg>"##,
+            )
+            .unwrap();
+            f
+        };
+        let (one, two) = (svg("one.svg"), svg("two.svg"));
+        let mut s = crate::app::Studio::with_file(None, None);
+        assert!(!s.action_enabled(Action::ClearRecent));
+        s.load(&one);
+        s.load(&two);
+        assert_eq!(s.recent.labels(), ["two.svg", "one.svg"]);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::Vec2::new(900.0, 700.0))
+            .build_ui_state(|ui, s: &mut crate::app::Studio| s.menu_bar(ui), s);
+        h.get_by_label("File").click();
+        h.run_steps(4);
+        h.get_by_label("Open Recent").click();
+        h.run_steps(4);
+        h.get_by_label("Clear Menu");
+        h.get_by_label("one.svg").click();
+        h.run_steps(4);
+        // Its tab is in front, and it's the newest on the list now.
+        let s = h.state_mut();
+        assert_eq!(s.doc.path.as_deref(), Some(one.as_path()));
+        assert_eq!(s.recent.labels(), ["one.svg", "two.svg"]);
+        // A file that's gone is taken off the list, not opened.
+        std::fs::remove_file(&two).unwrap();
+        s.run_action(Action::OpenRecent(1));
+        assert_eq!(s.recent.labels(), ["one.svg"]);
+        assert!(s.status.contains("isn't there any more"), "{}", s.status);
+        s.run_action(Action::ClearRecent);
+        assert!(s.recent.files().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn help_reports_an_issue_on_github_saying_which_zigzag() {
         let help = menus().pop().unwrap();
         assert_eq!(help.0, "Help");
         let has = |a: Action| help.1.iter().any(|e| matches!(e, Item(x, _, _) if *x == a));
         assert!(has(Action::ReportIssue) && has(Action::GitHub) && has(Action::CrashLogs));
+        assert!(has(Action::ContactSupport));
         // About is in Help where there's no app menu for it: once, anywhere.
         assert_eq!(has(Action::About), !cfg!(target_os = "macos"));
         assert_eq!(

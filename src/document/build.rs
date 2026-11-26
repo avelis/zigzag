@@ -24,15 +24,15 @@ use std::collections::{HashMap, HashSet};
 /// Pieces smaller than this aren't kept (units²: a twentieth of a square
 /// millimetre, less than one stitch covers): what two outlines that should
 /// have met exactly leave between them.
-const SLIVER: f64 = 5.0;
+pub(super) const SLIVER: f64 = 5.0;
 
 /// How near a point of a result has to be to a corner of what it was made
 /// from (or to the Knife's cut) to be that corner (or on it): units, well
 /// over what the arithmetic moves a point by, well under a stitch.
-const SAME: f64 = 0.05;
+pub(super) const SAME: f64 = 0.05;
 
 /// How far `p` is from the line `a`–`b`.
-fn off_segment(p: P, a: P, b: P) -> f64 {
+pub(super) fn off_segment(p: P, a: P, b: P) -> f64 {
     let ab = b - a;
     let l2 = ab.dot(ab);
     let t = if l2 > 0.0 {
@@ -100,7 +100,7 @@ fn fit_ring(ring: &[P], corners: &[P]) -> Option<SubPath> {
 }
 
 /// The outline of a shape made out of others, as a path (see `fit_ring`).
-fn fit(rings: &[Polyline], corners: &[P]) -> BezPath {
+pub(super) fn fit(rings: &[Polyline], corners: &[P]) -> BezPath {
     rings
         .iter()
         .filter(|r| r.len() >= 3)
@@ -109,7 +109,7 @@ fn fit(rings: &[Polyline], corners: &[P]) -> BezPath {
 }
 
 /// The area of a shape given as its outline and then its holes.
-fn area_of(rings: &[Polyline]) -> f64 {
+pub(super) fn area_of(rings: &[Polyline]) -> f64 {
     let mut a: Vec<f64> = rings.iter().map(|r| boolean::ring_area(r)).collect();
     a.sort_by(|x, y| y.total_cmp(x));
     match a.split_first() {
@@ -123,7 +123,7 @@ fn area_of(rings: &[Polyline]) -> f64 {
 /// thinner than a fifth of a millimetre (nothing sews in that). Where one
 /// shape's edge runs a hair inside another's, or outside it, what's
 /// between them is this.
-fn slight(part: &[Polyline]) -> bool {
+pub(super) fn slight(part: &[Polyline]) -> bool {
     let around: f64 = part
         .iter()
         .map(|r| {
@@ -137,7 +137,7 @@ fn slight(part: &[Polyline]) -> bool {
 }
 
 /// Whether part `a` comes right up to area `b`: a point of it on `b`'s edge.
-fn touches(a: &[Polyline], b: &[Polyline]) -> bool {
+pub(super) fn touches(a: &[Polyline], b: &[Polyline]) -> bool {
     a.iter().flatten().any(|&p| {
         b.iter()
             .any(|r| (0..r.len()).any(|k| off_segment(p, r[k], r[(k + 1) % r.len()]) <= 4.0 * SAME))
@@ -145,14 +145,14 @@ fn touches(a: &[Polyline], b: &[Polyline]) -> bool {
 }
 
 /// The separate parts of an area that are worth keeping.
-fn parts_kept(rings: &[Polyline]) -> Vec<Vec<Polyline>> {
+pub(super) fn parts_kept(rings: &[Polyline]) -> Vec<Vec<Polyline>> {
     boolean::parts(rings, FillRule::EvenOdd)
         .into_iter()
         .filter(|p| area_of(p) > SLIVER)
         .collect()
 }
 
-fn op(a: &[Polyline], b: &[Polyline], op: PathOp) -> Vec<Polyline> {
+pub(super) fn op(a: &[Polyline], b: &[Polyline], op: PathOp) -> Vec<Polyline> {
     boolean::pathfinder(
         &[
             (a.to_vec(), FillRule::EvenOdd),
@@ -178,6 +178,20 @@ fn extent(rings: &[Polyline]) -> (P, P) {
 /// Whether two boxes overlap or touch.
 fn meet(a: (P, P), b: (P, P)) -> bool {
     a.0.x <= b.1.x && b.0.x <= a.1.x && a.0.y <= b.1.y && b.0.y <= a.1.y
+}
+
+/// A new object for [`Document::insert_made`]: its outline, the object
+/// it goes beside (and is sewn just before), its thread and settings, the
+/// name its id is made from, how many of that object's groups it stays in
+/// (`None`: all), and for a line, its stroke width (mm).
+pub(super) struct Made {
+    pub path: BezPath,
+    pub beside: usize,
+    pub color: [u8; 3],
+    pub params: Params,
+    pub name: String,
+    pub keep: Option<usize>,
+    pub line: Option<f64>,
 }
 
 /// One of the parts that overlapping shapes divide each other into.
@@ -257,7 +271,7 @@ impl Document {
     }
 
     /// The corners of object `i`'s outline: its points that aren't smooth.
-    fn corners_of(&self, i: usize) -> Vec<P> {
+    pub(super) fn corners_of(&self, i: usize) -> Vec<P> {
         self.edit_path(i)
             .map(|path| {
                 path.iter()
@@ -270,7 +284,7 @@ impl Document {
     }
 
     /// The area of object `i`, even-odd.
-    fn clean_area(&self, i: usize) -> Vec<Polyline> {
+    pub(super) fn clean_area(&self, i: usize) -> Vec<Polyline> {
         let (rings, rule) = self.area(i);
         boolean::normalize(&rings, rule)
     }
@@ -279,8 +293,25 @@ impl Document {
     /// `beside`'s element, inside whatever groups that's in: it's sewn
     /// where that one is, and belongs where that one does (a layer, a
     /// group that's been entered). Returns its id; `import` comes after.
-    fn insert_beside(&mut self, path: &BezPath, beside: usize, name: &str) -> Result<String> {
+    /// It stays inside only the first `keep` of the groups `beside` is in
+    /// (`None`: all of them): it goes just before whatever holds `beside`
+    /// at that depth. With `line` (a stroke width, mm), it's an unfilled
+    /// line stroked that wide, not a shape.
+    pub(super) fn insert_in(
+        &mut self,
+        path: &BezPath,
+        beside: usize,
+        name: &str,
+        keep: Option<usize>,
+        line: Option<f64>,
+    ) -> Result<String> {
         let m = self.mm_to_user()?;
+        let paint = match line {
+            Some(w) => format!(
+                "fill=\"none\" stroke=\"#000\" stroke-width=\"{w:.2}\" stroke-linejoin=\"round\" stroke-linecap=\"round\""
+            ),
+            None => "fill=\"#000\" fill-rule=\"evenodd\"".to_string(),
+        };
         let d = bezier::to_svg_d(&bezier::transform(path, [0.1, 0.0, 0.0, 0.1, 0.0, 0.0]));
         let (id, at, inside) = {
             let doc = roxmltree::Document::parse(&self.xml).context("parsing document")?;
@@ -302,6 +333,24 @@ impl Document {
                 .descendants()
                 .find(|n| n.is_element() && n.attribute("id") == Some(s.id.as_str()))
                 .ok_or_else(|| anyhow!("element {} not found", s.id))?;
+            // What holds it at the depth it's to go in: the element itself,
+            // or the ancestor just inside the last group kept.
+            let n = match keep {
+                None => n,
+                Some(k) => {
+                    let within = k.checked_sub(1).and_then(|k| s.groups.get(k));
+                    n.ancestors()
+                        .filter(|a| a.is_element())
+                        .find(|a| match a.parent_element() {
+                            Some(p) => match within {
+                                Some(g) => p.attribute("id") == Some(g.as_str()),
+                                None => p == doc.root_element(),
+                            },
+                            None => true,
+                        })
+                        .unwrap_or(n)
+                }
+            };
             // The groups it's in, outermost first, and what they do to
             // what's inside them.
             let groups: Vec<_> = n
@@ -312,7 +361,7 @@ impl Document {
             if groups.iter().any(|g| g.tag_name().name() != "g") {
                 // (Inside something that isn't a plain group: beside the
                 // whole of that, as Pathfinder's results go.)
-                return self.insert_shape(path, Some(beside), name);
+                return self.insert_shape_painted(path, Some(beside), name, &paint);
             }
             let inside = groups
                 .iter()
@@ -324,11 +373,11 @@ impl Document {
             (id, n.range().start, inside)
         };
         let Some(out) = affine_inv(inside) else {
-            return self.insert_shape(path, Some(beside), name);
+            return self.insert_shape_painted(path, Some(beside), name, &paint);
         };
         self.next_group += 1;
         let el = format!(
-            "<g id=\"tl-drawing-{}\" transform=\"{}\"><path id=\"{}\" d=\"{d}\" fill=\"#000\" fill-rule=\"evenodd\"/></g>\n",
+            "<g id=\"tl-drawing-{}\" transform=\"{}\"><path id=\"{}\" d=\"{d}\" {paint}/></g>\n",
             self.next_group,
             super::edit::fmt_matrix(affine_mul(out, m)),
             super::xml_escape(&id)
@@ -344,6 +393,24 @@ impl Document {
         made: Vec<(BezPath, usize, [u8; 3], Params, String)>,
         gone: &[usize],
     ) -> Result<Vec<usize>> {
+        let made = made
+            .into_iter()
+            .map(|(path, beside, color, params, name)| Made {
+                path,
+                beside,
+                color,
+                params,
+                name,
+                keep: None,
+                line: None,
+            })
+            .collect();
+        self.insert_made(made, gone)
+    }
+
+    /// [`Document::insert_shapes`], each new object placed as its [`Made`]
+    /// says.
+    pub(super) fn insert_made(&mut self, made: Vec<Made>, gone: &[usize]) -> Result<Vec<usize>> {
         // Where each is to be sewn: just before the object it's beside,
         // or, that one being about to go, before the next that stays.
         let before = |i: usize| -> Option<usize> {
@@ -351,11 +418,11 @@ impl Document {
                 .find(|j| !gone.contains(j))
                 .map(|j| self.shapes[j].uid)
         };
-        let slots: Vec<Option<usize>> = made.iter().map(|m| before(m.1)).collect();
+        let slots: Vec<Option<usize>> = made.iter().map(|m| before(m.beside)).collect();
         let mut looks: Vec<(String, [u8; 3], Params)> = Vec::with_capacity(made.len());
-        for (path, behind, color, params, name) in made {
-            let id = self.insert_beside(&path, behind, &name)?;
-            looks.push((id, color, params));
+        for m in made {
+            let id = self.insert_in(&m.path, m.beside, &m.name, m.keep, m.line)?;
+            looks.push((id, m.color, m.params));
         }
         if !gone.is_empty() {
             self.delete_many(gone)?;
@@ -406,7 +473,7 @@ impl Document {
     /// what was said of that object alone and means nothing on another
     /// outline (where along it sewing starts and ends) or would be said
     /// once too often (a trim or a stop after it).
-    fn made_params(&self, i: usize) -> Params {
+    pub(super) fn made_params(&self, i: usize) -> Params {
         Params {
             start: None,
             end: None,

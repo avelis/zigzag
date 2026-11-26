@@ -20,13 +20,15 @@ mod edit;
 mod glyphs;
 mod groups;
 mod lettering;
+mod pathfinder;
 mod paths;
 mod simplify;
 pub use build::Face;
 pub use cleanup::{CleanUp, CleanUpReport};
 pub use edit::Fragment;
 pub use glyphs::{Carets, GlyphBox};
-pub use lettering::{Align, Case, TextSpec, default_font, font_families};
+pub use lettering::{Align, Case, TextSpec, default_font, font_families, has_type_tokens};
+pub use pathfinder::Pathfinder;
 pub use simplify::{SimplifyDesign, SimplifyReport, Unite};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -511,6 +513,40 @@ impl Document {
                 )
             })
             .collect()
+    }
+
+    /// Read the SVG again, keeping every object's uid: after fonts were
+    /// added, so lettering set in a font that has only now arrived is
+    /// drawn in it rather than in the stand-in it was read with. (A new
+    /// revision, so it's planned again.)
+    pub fn reload_fonts(&mut self) -> Result<()> {
+        // (Settings changed since it was last written, a stitch type say,
+        // are written into it first: what's read back keeps them.)
+        self.sync()?;
+        let uids = self.uid_map(&HashMap::new());
+        self.import(&uids)
+    }
+
+    /// The fonts this document's text names (the first of each list, not
+    /// `serif` and the like), each once, as named.
+    pub fn lettering_fonts(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for (name, _) in self.lettering_texts() {
+            if !out.iter().any(|f| f.eq_ignore_ascii_case(&name)) {
+                out.push(name);
+            }
+        }
+        out
+    }
+
+    /// Each font the document's text names (as [`Self::lettering_fonts`]
+    /// has them) with the text it's named on: all that's inside the `text`,
+    /// `tspan` or `textPath` naming it. One read of the SVG for them all.
+    pub fn lettering_texts(&self) -> Vec<(String, String)> {
+        match roxmltree::Document::parse(&self.xml) {
+            Ok(doc) => crate::svg::named_fonts(&doc),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Write current settings into the XML and re-import from it.

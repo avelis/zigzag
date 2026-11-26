@@ -30,6 +30,7 @@ mod dock;
 mod eyedropper;
 mod file_dialog;
 mod flyout;
+mod fonts;
 mod gpu;
 mod history;
 mod icons;
@@ -53,6 +54,7 @@ mod perf_bench;
 mod plan_keep;
 mod planner;
 mod profile;
+mod recent;
 mod review;
 mod rotate;
 mod session;
@@ -61,6 +63,7 @@ mod sew;
 mod shapes;
 mod thumbs;
 mod share;
+mod support;
 mod simplify;
 mod slash;
 mod snap;
@@ -191,6 +194,8 @@ fn main() -> eframe::Result {
             instance::Start::Alone => {}
         }
     }
+    // The fonts downloaded before, for lettering from the start.
+    fonts::use_kept_fonts();
     // Scan the system fonts in the background: a design without text opens
     // without waiting on them, and they're ready by the first lettering.
     std::thread::spawn(|| {

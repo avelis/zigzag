@@ -131,6 +131,9 @@ jobs:
             throw "The packaged CLI failed its version check."
           }
           Copy-Item LICENSE, NOTICE, THIRD-PARTY-NOTICES.md "$stage\"
+          # The lettering fonts that come with ZigZag, beside the programs.
+          New-Item -ItemType Directory -Force -Path "$stage\fonts" | Out-Null
+          Copy-Item fonts\fonts.json, fonts\*.ttf "$stage\fonts\"
           Copy-Item packaging-ref\packaging\windows\README.txt "$stage\"
           "name=$name"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "stage=$stage" | Out-File -FilePath $env:GITHUB_OUTPUT -Append

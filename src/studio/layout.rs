@@ -98,6 +98,8 @@ pub const HOOP_MARGIN_MM: f64 = 2.0;
 #[derive(Default, Clone)]
 pub struct LayoutState {
     pub multi: Vec<usize>,
+    /// The Pathfinder operation applied last, for Repeat Pathfinder.
+    pub last_pathfinder: Option<zigzag::document::Pathfinder>,
     /// The task bar's outline row is tucked away (the outline itself is
     /// as it was: the bar's outline button shows its thread).
     pub outline_row_closed: bool,
@@ -470,6 +472,39 @@ impl Studio {
             .iter()
             .find(|g| !one_thing(&self.doc.shapes, &self.group_members(g)))
             .cloned()
+    }
+
+    /// [`Studio::click_group`] for each of `idx`, the groups looked through
+    /// once for them all (a Select All is hundreds of objects, asked about
+    /// whenever the menus are brought up to date).
+    pub fn click_groups(&self, idx: &[usize]) -> Vec<Option<String>> {
+        let shapes = &self.doc.shapes;
+        // Each group: its first member's id, how many members, and whether
+        // they're one thing (see `one_thing`).
+        let mut seen: std::collections::HashMap<&str, (&str, usize, bool)> = Default::default();
+        for s in shapes {
+            for g in &s.groups {
+                let e = seen.entry(g.as_str()).or_insert((s.id.as_str(), 0, true));
+                e.1 += 1;
+                if e.1 > 1 && (e.0.is_empty() || e.0 != s.id) {
+                    e.2 = false;
+                }
+            }
+        }
+        let scope = self.scope();
+        idx.iter()
+            .map(|&i| {
+                let groups = &shapes.get(i)?.groups;
+                let start = match scope {
+                    None => 0,
+                    Some(g) => groups.iter().position(|x| x == g)? + 1,
+                };
+                groups[start..]
+                    .iter()
+                    .find(|g| seen.get(g.as_str()).is_some_and(|e| !e.2))
+                    .cloned()
+            })
+            .collect()
     }
 
     /// The selection as what its settings are for: every selected object
@@ -857,22 +892,76 @@ impl Studio {
         }
     }
 
-    /// Combine the selection with a Pathfinder operation.
-    pub fn pathfinder_selected(&mut self, op: zigzag::boolean::PathOp) {
+    /// What a Pathfinder operation takes from the selection: each object,
+    /// or for a Shape Mode, each group selected among other objects as one
+    /// shape (a group selected alone is its members, as in Illustrator).
+    pub fn pathfinder_operands(&self, op: zigzag::document::Pathfinder) -> Vec<Vec<usize>> {
         // (The shapes: an outline selected along with its shape isn't one
         // of the things combined, and goes with the shape.)
         let idx = self.subjects();
-        let n = idx.len();
-        let mut new = 0;
+        if op.shape_op().is_none() {
+            return idx.into_iter().map(|i| vec![i]).collect();
+        }
+        let groups = self.click_groups(&idx);
+        if groups.iter().all(|g| g.is_some() && *g == groups[0]) {
+            return idx.into_iter().map(|i| vec![i]).collect();
+        }
+        let mut out: Vec<Vec<usize>> = Vec::new();
+        let mut at: std::collections::HashMap<String, usize> = Default::default();
+        for (i, g) in idx.into_iter().zip(groups) {
+            match g {
+                Some(g) => match at.get(&g) {
+                    Some(&k) => out[k].push(i),
+                    None => {
+                        at.insert(g, out.len());
+                        out.push(vec![i]);
+                    }
+                },
+                None => out.push(vec![i]),
+            }
+        }
+        out
+    }
+
+    /// Whether the selection is enough for Pathfinder operation `op`.
+    pub fn pathfinder_ready(&self, op: zigzag::document::Pathfinder) -> bool {
+        // (Two objects or more are always two operands or more for a Shape
+        // Mode: of one group they're its members, each one; otherwise two
+        // groups, or a group and an object, or two objects. So the count
+        // answers it, without working the operands out for every menu item.)
+        self.subjects().len() >= op.min_objects()
+    }
+
+    /// Apply a Pathfinder operation to the selection.
+    pub fn pathfinder_selected(&mut self, op: zigzag::document::Pathfinder) {
+        let operands = self.pathfinder_operands(op);
+        let n: usize = operands.iter().map(Vec::len).sum();
+        let mut made = Vec::new();
         match self.structural(|d| {
-            new = d.pathfinder(&idx, op)?;
+            made = d.run_pathfinder(&operands, op)?;
             Ok(())
         }) {
             Ok(()) => {
-                self.set_selection(&[new]);
-                self.status = format!("{op:?}: {n} objects into one shape.");
+                self.layout.last_pathfinder = Some(op);
+                self.set_selection(&made);
+                let objects = |k: usize| {
+                    if k == 1 {
+                        "1 object".to_string()
+                    } else {
+                        format!("{k} objects")
+                    }
+                };
+                self.status = match op.shape_op() {
+                    Some(_) => format!("{}: {} into one shape.", op.label(), objects(n)),
+                    None => format!(
+                        "{}: {} from {}.",
+                        op.label(),
+                        objects(made.len()),
+                        objects(n)
+                    ),
+                };
             }
-            Err(e) => self.status = format!("Couldn't combine them: {e:#}"),
+            Err(e) => self.status = format!("Couldn't {}: {e:#}", op.label().to_lowercase()),
         }
     }
 
@@ -1945,7 +2034,7 @@ impl Studio {
         };
         let c = b.center();
         let mut new_ref: Option<(i8, i8)> = None;
-        let mut path_op: Option<zigzag::boolean::PathOp> = None;
+        let mut path_op: Option<zigzag::document::Pathfinder> = None;
         let mut rotate: Option<f64> = None;
         let mut flip: Option<(f64, f64)> = None;
         let mut center = false;
@@ -2040,22 +2129,22 @@ impl Studio {
                 }
             });
             if self.subjects().len() >= 2 {
-                fm.row("Pathfinder", |ui, _| {
-                    use zigzag::boolean::PathOp;
-                    for (op, icon, label) in [
-                        (PathOp::Unite, Icon::PathUnite, "Unite"),
-                        (PathOp::MinusFront, Icon::PathMinusFront, "Minus Front"),
-                        (PathOp::Intersect, Icon::PathIntersect, "Intersect"),
-                        (PathOp::Exclude, Icon::PathExclude, "Exclude"),
-                    ] {
-                        if icon_button(ui, icon, label, false, PANEL_ICON)
-                            .on_hover_text(label)
-                            .clicked()
-                        {
-                            path_op = Some(op);
+                use zigzag::document::Pathfinder;
+                for (row, ops) in [
+                    ("Shape Modes", &Pathfinder::SHAPE_MODES[..]),
+                    ("Pathfinders", &Pathfinder::PATHFINDERS[..]),
+                ] {
+                    fm.row(row, |ui, _| {
+                        for &op in ops {
+                            if icon_button(ui, pathfinder_icon(op), op.label(), false, PANEL_ICON)
+                                .on_hover_text(op.help())
+                                .clicked()
+                            {
+                                path_op = Some(op);
+                            }
                         }
-                    }
-                });
+                    });
+                }
             }
         });
         if let Some(op) = path_op {
@@ -2639,6 +2728,94 @@ mod tests {
     }
 
     #[test]
+    fn pathfinder_takes_a_group_among_others_as_one_shape_and_repeats() {
+        use crate::commands::Action;
+        use zigzag::document::Pathfinder;
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="100mm" viewBox="0 0 100 100">
+          <g id="pair"><rect id="a" x="10" y="10" width="10" height="10" fill="#c00"/>
+          <rect id="b" x="20" y="10" width="10" height="10" fill="#c00"/></g>
+          <rect id="c" x="15" y="10" width="10" height="10" fill="#080"/>
+          <rect id="d" x="50" y="50" width="20" height="20" fill="#c00"/>
+          <rect id="e" x="60" y="60" width="20" height="20" fill="#080"/>
+        </svg>"##;
+        let mut h = studio();
+        h.state_mut()
+            .set_document(zigzag::document::Document::from_svg(svg, "t", None).unwrap());
+        h.run_steps(3);
+        let at = |h: &Harness<'_, Studio>, id: &str| {
+            h.state()
+                .doc
+                .shapes
+                .iter()
+                .position(|s| s.id == id || s.id.starts_with(&format!("{id}_")))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{id}: {:?}",
+                        h.state()
+                            .doc
+                            .shapes
+                            .iter()
+                            .map(|s| &s.id)
+                            .collect::<Vec<_>>()
+                    )
+                })
+        };
+        let (a, b, c) = (at(&h, "a"), at(&h, "b"), at(&h, "c"));
+        h.state_mut().set_selection(&[a, b, c]);
+        assert_eq!(
+            h.state().pathfinder_operands(Pathfinder::MinusFront),
+            vec![vec![a, b], vec![c]],
+            "the group is one shape"
+        );
+        assert_eq!(
+            h.state().pathfinder_operands(Pathfinder::Trim).len(),
+            3,
+            "the Pathfinders take each object"
+        );
+        // The group alone: its members.
+        h.state_mut().set_selection(&[a, b]);
+        assert_eq!(h.state().pathfinder_operands(Pathfinder::Unite).len(), 2);
+        assert!(
+            !h.state().action_enabled(Action::RepeatPathfinder),
+            "nothing to repeat yet"
+        );
+
+        h.state_mut().set_selection(&[a, b, c]);
+        h.state_mut()
+            .run_action(Action::Pathfinder(Pathfinder::MinusFront));
+        h.run_steps(3);
+        let made = h.state().sel_index().expect("the result is selected");
+        let area: f64 = match &h.state().doc.shapes[made].geometry {
+            zigzag::svg::Geometry::Fill { rings, .. } => {
+                rings.iter().map(|r| zigzag::boolean::ring_area(r)).sum()
+            }
+            _ => 0.0,
+        };
+        // 20 × 10 less the 10 × 10 in front: two 5 × 10 ends.
+        assert!(
+            (area - 10_000.0).abs() < 50.0,
+            "{area} ({})",
+            h.state().status
+        );
+        assert_eq!(h.state().doc.shapes[made].color, [0xcc, 0, 0]);
+
+        // Repeat Pathfinder (⌘4) does it again, to what's selected now.
+        let (d, e) = (at(&h, "d"), at(&h, "e"));
+        h.state_mut().set_selection(&[d, e]);
+        assert!(h.state().action_enabled(Action::RepeatPathfinder));
+        let n = h.state().doc.shapes.len();
+        h.state_mut().run_action(Action::RepeatPathfinder);
+        h.run_steps(3);
+        assert_eq!(h.state().doc.shapes.len(), n - 1, "{}", h.state().status);
+
+        h.state_mut().set_selection(&[]);
+        assert!(
+            !h.state()
+                .action_enabled(Action::Pathfinder(Pathfinder::Divide))
+        );
+    }
+
+    #[test]
     fn a_drag_carries_the_outline_and_stitches_that_share_a_thread() {
         // A shape with an outline in another thread, and two more shapes
         // in one thread, sewn one after the other: one block for the two.
@@ -2881,5 +3058,23 @@ mod tests {
             "selection survives the edit"
         );
         assert_eq!(h.state().undo.len(), 1);
+    }
+}
+
+/// The icon of a Pathfinder operation's button.
+pub fn pathfinder_icon(op: zigzag::document::Pathfinder) -> crate::icons::Icon {
+    use crate::icons::Icon;
+    use zigzag::document::Pathfinder as P;
+    match op {
+        P::Unite => Icon::PathUnite,
+        P::MinusFront => Icon::PathMinusFront,
+        P::Intersect => Icon::PathIntersect,
+        P::Exclude => Icon::PathExclude,
+        P::Divide => Icon::PathDivide,
+        P::Trim => Icon::PathTrim,
+        P::Merge => Icon::PathMerge,
+        P::Crop => Icon::PathCrop,
+        P::Outline => Icon::PathOutline,
+        P::MinusBack => Icon::PathMinusBack,
     }
 }

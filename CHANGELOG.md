@@ -7,6 +7,14 @@
   too, like "Red Cross Logo"); renamed and copied groups keep theirs.
 - Agents can place files with `place_file`, and the command line with
   `zigzag convert … --place FILE[@X,Y]` (PES, PEC, DST, EXP, JEF or VP3).
+- The Pathfinder has all of Illustrator's operations: Divide, Trim,
+  Merge, Crop, Outline and Minus Back join the Shape Modes, in the
+  Transform panel and Object › Pathfinder, with Repeat Pathfinder (⌘4).
+  Trim and Merge take out stitching hidden under what's sewn later;
+  Outline makes running stitch along every edge, sewn once.
+- A group selected among other objects is one shape to the Shape Modes,
+  results stay in the group their objects were in, and corners stay
+  sharp.
 
 ## 0.1.11 — 2026-11-23
 

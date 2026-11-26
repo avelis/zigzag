@@ -72,6 +72,9 @@ pub enum Kind {
     Cross,
     /// Woven stripes in several threads.
     Tartan,
+    /// A motif repeated over the shape in rows of running stitch (see
+    /// [`crate::stitch::motif`]).
+    Motif,
 }
 
 impl Kind {
@@ -89,6 +92,7 @@ impl Kind {
             Kind::Ripple => "ripple",
             Kind::Cross => "cross",
             Kind::Tartan => "tartan",
+            Kind::Motif => "motif",
         }
     }
     pub fn parse(s: &str) -> Option<Kind> {
@@ -105,6 +109,7 @@ impl Kind {
             "ripple" => Some(Kind::Ripple),
             "cross" | "crossstitch" | "cross-stitch" => Some(Kind::Cross),
             "tartan" | "plaid" => Some(Kind::Tartan),
+            "motif" => Some(Kind::Motif),
             _ => None,
         }
     }
@@ -204,6 +209,16 @@ pub struct Params {
     pub sett: Option<Vec<([u8; 3], f64)>>,
     /// Cross-stitch cell size, mm.
     pub cell: Option<f64>,
+    /// A motif (see [`crate::stitch::motif`]): its lines, mm, each a list
+    /// of points; laid out from their top-left corner. On a fill, a
+    /// patterned fill; on a motif fill, what's repeated. `motif=X:Y+X:Y`,
+    /// lines separated by `/`.
+    pub motif: Option<Vec<Vec<(f64, f64)>>>,
+    /// The motif's tile, mm (width, height): how far apart its copies are.
+    /// Unset: the motif's own size. `tile=W:H`.
+    pub tile: Option<(f64, f64)>,
+    /// How the motif's tiles are laid out. Unset: brick. `layout=grid`.
+    pub layout: Option<crate::stitch::motif::Layout>,
     /// The way the thread comes to this object from the one sewn before
     /// it in the same thread, drawn by hand: points (mm, the design's
     /// coordinates) it's sewn through with running stitches, in place of
@@ -521,6 +536,9 @@ impl Params {
             colors: child.colors.clone().or_else(|| self.colors.clone()),
             sett: child.sett.clone().or_else(|| self.sett.clone()),
             cell: child.cell.or(self.cell),
+            motif: child.motif.clone().or_else(|| self.motif.clone()),
+            tile: child.tile.or(self.tile),
+            layout: child.layout.or(self.layout),
             // (An object's own: not every object of a group it's set on.)
             via: child.via.clone(),
             trim: child.trim.or(self.trim),
@@ -660,6 +678,14 @@ impl Params {
                 self.sett = st.filter(|s| !s.is_empty());
             }
             "cell" => self.cell = num.filter(|v| *v >= 1.0),
+            "motif" => self.motif = parse_motif(v),
+            "tile" => {
+                self.tile = v.split_once(':').and_then(|(w, h)| {
+                    let n = |t: &str| t.parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0);
+                    Some((n(w)?, n(h)?))
+                })
+            }
+            "layout" => self.layout = crate::stitch::motif::Layout::parse(v),
             "via" => {
                 self.via = if v == "direct" {
                     Some(Vec::new())
@@ -764,6 +790,15 @@ impl Params {
                     .join("+")
             ));
         }
+        if let Some(m) = &self.motif {
+            t.push(format!("motif={}", format_motif(m)));
+        }
+        if let Some((w, h)) = self.tile {
+            t.push(format!("tile={}:{}", fmt_num(w), fmt_num(h)));
+        }
+        if let Some(l) = self.layout {
+            t.push(format!("layout={}", l.name()));
+        }
         if let Some(via) = &self.via {
             t.push(if via.is_empty() {
                 "via=direct".to_string()
@@ -794,6 +829,39 @@ impl Params {
         }
         t
     }
+}
+
+/// A motif's lines from `X:Y+X:Y/X:Y+…` (mm): lines of two points or more.
+pub fn parse_motif(v: &str) -> Option<Vec<Vec<(f64, f64)>>> {
+    let lines: Option<Vec<Vec<(f64, f64)>>> = v
+        .split('/')
+        .map(|line| {
+            line.split('+')
+                .map(|pt| {
+                    let (x, y) = pt.split_once(':')?;
+                    let n = |t: &str| t.parse::<f64>().ok().filter(|v| v.is_finite());
+                    Some((n(x)?, n(y)?))
+                })
+                .collect::<Option<Vec<_>>>()
+        })
+        .collect();
+    lines
+        .map(|ls| ls.into_iter().filter(|l| l.len() >= 2).collect::<Vec<_>>())
+        .filter(|ls| !ls.is_empty())
+}
+
+/// A motif's lines as `parse_motif` reads them.
+pub fn format_motif(lines: &[Vec<(f64, f64)>]) -> String {
+    lines
+        .iter()
+        .map(|l| {
+            l.iter()
+                .map(|(x, y)| format!("{}:{}", fmt_num(*x), fmt_num(*y)))
+                .collect::<Vec<_>>()
+                .join("+")
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 pub fn fmt_num(v: f64) -> String {
@@ -946,10 +1014,29 @@ mod tests {
             colors: Some(vec![[255, 0, 0], [0, 0, 255]]),
             sett: Some(vec![([10, 20, 30], 4.0), ([200, 200, 0], 1.5)]),
             cell: Some(3.0),
+            motif: Some(vec![
+                vec![(0.0, 0.0), (1.25, -2.5), (2.5, 0.0)],
+                vec![(0.5, 0.5), (2.0, 0.5)],
+            ]),
+            tile: Some((3.0, 2.75)),
+            layout: Some(crate::stitch::motif::Layout::HexColumn),
             ..Params::default()
         };
         assert_eq!(Params::parse(&p.tokens().join(" ")), p);
         assert_eq!(Params::parse(&p.tokens().join("_")), p);
+    }
+
+    #[test]
+    fn a_motif_survives_illustrator_escapes_and_bad_points() {
+        // Illustrator writes `=` and `:` as `_x3D_` and `_x3A_`.
+        let p = Params::parse("leaf_fill_motif_x3D_0_x3A_0+1_x3A_1");
+        assert_eq!(p.kind, Some(Kind::Fill));
+        assert_eq!(p.motif, Some(vec![vec![(0.0, 0.0), (1.0, 1.0)]]));
+        // A line of one point is no line; none left is no motif.
+        assert_eq!(Params::parse("motif=1:1").motif, None);
+        assert_eq!(Params::parse("motif=1:x+2:2").motif, None);
+        // (The bare word is the stitch type, not a motif.)
+        assert_eq!(Params::parse("motif").kind, Some(Kind::Motif));
     }
 
     #[test]

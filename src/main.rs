@@ -371,6 +371,7 @@ fn write_output(doc: &Document, d: &Design, path: &Path, hoop: (f64, f64)) -> Re
                 background: [255, 255, 255],
                 names: doc.object_names(),
                 spm: 400.0,
+                ..Default::default()
             };
             zigzag::formats::worksheet::html(d, &info)?.into_bytes()
         }

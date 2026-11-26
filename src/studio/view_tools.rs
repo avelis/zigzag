@@ -623,6 +623,10 @@ impl Studio {
             background: self.doc.settings.cloth,
             names: self.names.clone(),
             spm: SPM,
+            chart: match self.view_tools.brand {
+                crate::threads::Brand::Brother => zigzag::formats::worksheet::Chart::Brother,
+                crate::threads::Brand::Janome => zigzag::formats::worksheet::Chart::Janome,
+            },
         };
         zigzag::formats::worksheet::html(&self.design, &info)
     }

@@ -366,6 +366,8 @@ impl Studio {
         let slow = self.plan_ms > crate::planner::SLOW_MS
             || (self.dirty && self.design.stitch_count() > 0);
         self.planner.entered(slow);
+        // (Fonts that came while it was at the back, or that it lacks.)
+        self.check_document_fonts();
     }
 
     /// Bring tab `j` to the front.

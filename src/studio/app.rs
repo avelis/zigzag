@@ -196,6 +196,8 @@ pub struct Studio {
     /// A drag with Smooth, Path Eraser or Join.
     pub(crate) gesture: crate::path_tools::Gesture,
     pub(crate) palettes: crate::palettes::Palettes,
+    /// File › Open Recent (see `recent.rs`).
+    pub(crate) recent: crate::recent::Recent,
     /// The machines to choose from, and the one new documents start with.
     pub(crate) machines: crate::machines::Machines,
     /// Settings kept for this computer, and the Settings window.
@@ -254,6 +256,9 @@ pub struct Studio {
     /// shape is what's selected.
     pub(crate) picker_for: Option<usize>,
     pub(crate) lettering: crate::lettering::LetteringState,
+    /// Fonts beyond the computer's: the catalogue, downloads, and the
+    /// lettering waiting on them.
+    pub(crate) font_store: crate::fonts::FontStore,
     pub(crate) view_tools: crate::view_tools::ViewTools,
     pub(crate) dock: crate::dock::DockState,
     /// The panel layout as last written to disk.
@@ -329,6 +334,8 @@ pub struct Studio {
     pub(crate) focus_again: bool,
     /// File › Share… (see `share.rs`).
     pub(crate) share: crate::share::ShareUi,
+    /// Help › Contact Support… (see `support.rs`).
+    pub(crate) support: crate::support::SupportUi,
     /// Settings › Account: signed in to zigzag.diy (see `account.rs`).
     pub(crate) account: crate::account::AccountUi,
     /// Settings that follow you between computers (see `sync.rs`).
@@ -365,6 +372,14 @@ impl Studio {
         let resume = s.restore_sent() && s.session.resume_skitch;
         s.dock = crate::dock::DockState::load();
         s.palettes = crate::palettes::Palettes::load();
+        // (Read after the session's tabs came back, which aren't newly
+        // opened; the files this launch asked for are.)
+        s.recent = crate::recent::Recent::load();
+        for p in &paths {
+            if s.tab_with_path(p).is_some() {
+                s.recent.note(p);
+            }
+        }
         s.agent = crate::agent::AgentState::load();
         s.dock_saved = s.dock.clone();
         s.egui_ctx = Some(cc.egui_ctx.clone());
@@ -701,6 +716,7 @@ impl Studio {
             flyouts: Default::default(),
             gesture: Default::default(),
             palettes: Default::default(),
+            recent: Default::default(),
             machines: Default::default(),
             prefs: Default::default(),
             settings_ui: Default::default(),
@@ -724,6 +740,7 @@ impl Studio {
             bounds_memo: Default::default(),
             satin_memo: Default::default(),
             lettering: Default::default(),
+            font_store: Default::default(),
             view_tools: Default::default(),
             dock: Default::default(),
             dock_saved: Default::default(),
@@ -763,6 +780,7 @@ impl Studio {
             inbox: None,
             focus_again: false,
             share: Default::default(),
+            support: Default::default(),
             account: Default::default(),
             sync: Default::default(),
         };
@@ -789,6 +807,7 @@ impl Studio {
             && i != self.active_tab()
         {
             self.switch_tab(i);
+            self.recent.note(path);
             self.status = format!("{} is open in this tab.", path.display());
             return;
         }
@@ -802,6 +821,7 @@ impl Studio {
                     );
                     return;
                 }
+                self.recent.note(path);
                 self.status = format!("Opened {} ({n} objects).", path.display());
                 // Artwork too big for the hoop is scaled down to fit (one
                 // undo step). Stitch files keep their size.
@@ -851,6 +871,8 @@ impl Studio {
         if self.agent.log.is_empty() && !self.agent.running() {
             self.agent.forget_document();
         }
+        // Lettering in fonts that aren't here: downloaded, or said so.
+        self.check_document_fonts();
     }
 
     /// The plan shown is of the document as it is now.
@@ -1219,6 +1241,7 @@ impl Studio {
         self.cancel_point_drag();
         match self.doc.save(path) {
             Ok(p) => {
+                self.recent.note(&p);
                 self.stable = self.doc.clone();
                 self.modified = false;
                 self.status = format!(
@@ -1273,6 +1296,35 @@ impl Studio {
         };
         std::fs::write(path, bytes)?;
         Ok(())
+    }
+
+    /// File › Print Worksheet: write the worksheet where temporary files go
+    /// and open it in the browser, whose Print button (or the browser's own
+    /// print) prints it or saves it as a PDF.
+    pub(crate) fn print_worksheet(&mut self) {
+        self.plan_now();
+        let name: String = match self.doc.name.as_str() {
+            "" => "design".into(),
+            n => n
+                .chars()
+                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+                .collect(),
+        };
+        let path = std::env::temp_dir()
+            .join("zigzag-worksheets")
+            .join(format!("{name}.html"));
+        let written = self.worksheet_html().and_then(|html| {
+            std::fs::create_dir_all(path.parent().expect("a folder"))?;
+            std::fs::write(&path, html)?;
+            Ok(())
+        });
+        self.status = match written {
+            Ok(()) => {
+                crate::sew::open_url(&path.to_string_lossy());
+                "Opened the worksheet in your browser to print".into()
+            }
+            Err(e) => format!("Couldn't make the worksheet: {e}"),
+        };
     }
 
     pub(crate) fn export_dialog(&mut self, ext: &'static str) {
@@ -1981,9 +2033,12 @@ impl Studio {
         if let Some(h) = self.pending_history.take() {
             self.apply_history(h);
         }
+        self.tick_fonts(&ctx);
         self.take_plan();
         crate::profile::mark("input");
-        if self.dirty {
+        // (A design just opened waits a moment for fonts it's downloading,
+        // rather than being planned in a stand-in first.)
+        if self.dirty && !self.fonts_hold_plan() {
             self.plan_changes(&ctx);
         }
         crate::profile::mark("plan");
@@ -2129,6 +2184,8 @@ impl Studio {
         self.update_window(&ctx);
         self.crash_window(&ctx);
         self.about_window(&ctx);
+        self.support_window(&ctx);
+        self.font_warning_window(&ctx);
 
         // (Not on every frame of dragging a panel or a divider: when it's let go.)
         if self.dock != self.dock_saved && !ctx.input(|i| i.pointer.any_down()) {
