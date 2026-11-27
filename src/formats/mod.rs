@@ -254,8 +254,12 @@ pub fn companion_files(
             background: [255, 255, 255],
             ..Default::default()
         };
-        let (w, h, rgba) = preview::render_rgba(d, &look, 240)?;
-        out.push(("bmp", bmp::write_bmp(w, h, &rgba, look.background)));
+        // (Drawn larger, then fitted into the square a Bernina shows: see
+        // `bmp`.)
+        let (w, h, rgba) = preview::render_rgba(d, &look, 2 * bmp::PREVIEW_PX)?;
+        let side = bmp::PREVIEW_PX;
+        let square = bmp::fit_square(w, h, &rgba, side, look.background);
+        out.push(("bmp", bmp::write_bmp(side, side, &square, look.background)));
     }
     Ok(out)
 }
@@ -1080,7 +1084,10 @@ mod companion_tests {
         );
         let bmp = &files[1].1;
         assert_eq!(&bmp[0..2], b"BM");
-        assert_eq!(i32::from_le_bytes(bmp[18..22].try_into().unwrap()), 240);
+        // 120 × 120, 24-bit, bottom row first: the bitmap a Bernina shows.
+        assert_eq!(i32::from_le_bytes(bmp[18..22].try_into().unwrap()), 120);
+        assert_eq!(i32::from_le_bytes(bmp[22..26].try_into().unwrap()), 120);
+        assert_eq!(u16::from_le_bytes([bmp[28], bmp[29]]), 24);
         // Only what's asked for, and only beside an EXP.
         let inf_only = ExportOptions {
             exp_files: ExpFiles {
